@@ -830,7 +830,7 @@
     </p>
     <div class="form-group">
       <label>투입 대상 멤버</label>
-      <select id="dMember" onchange="checkDeployConflict()">
+      <select id="dMember" onchange="checkDeployConflict(); updateDeployCrmLabel()">
         <option value="">-- 멤버 선택 --</option>
       </select>
     </div>
@@ -859,6 +859,26 @@
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeDeployModal()">취소</button>
       <button class="btn btn-deploy" onclick="saveDeployEvent()">투입 확정</button>
+    </div>
+
+    <!-- vtiger CRM 연동 (배포 투입 모달) -->
+    <div class="crm-section" id="deployCrmSection">
+      <div class="crm-header">🔗 vtiger CRM 티켓 연동</div>
+      <div class="crm-input-row">
+        <input type="text" id="deployCrmTicketId" placeholder="티켓 번호 (예: 12345)" />
+        <button class="btn btn-primary" onclick="lookupDeployCrmTicket()" id="deployCrmLookupBtn">조회</button>
+      </div>
+      <div class="crm-ticket-card" id="deployCrmTicketCard">
+        <div class="crm-ticket-title" id="deployCrmTicketTitle"></div>
+        <div class="crm-ticket-meta">
+          <span>현재 담당자: <strong id="deployCrmCurrentAssignee">—</strong></span>
+          <a class="crm-ticket-link" id="deployCrmTicketLink" href="#" target="_blank">티켓 열기 ↗</a>
+        </div>
+        <button class="crm-assign-btn" id="deployCrmAssignBtn" onclick="updateDeployCrmAssignee()">
+          🎯 <span id="deployCrmWinnerLabel">선정 멤버</span>님으로 담당자 변경
+        </button>
+      </div>
+      <div class="crm-status" id="deployCrmStatus"></div>
     </div>
   </div>
 </div>
@@ -1352,6 +1372,11 @@ function openDeployModal() {
   populateTimeSelect('dEnd','18:00');
   document.getElementById('dDate').value = selectedDate();
   document.getElementById('dTitle').value = '';
+  // CRM 섹션 초기화
+  document.getElementById('deployCrmSection').classList.add('visible');
+  document.getElementById('deployCrmTicketCard').classList.remove('visible');
+  document.getElementById('deployCrmTicketId').value = '';
+  document.getElementById('deployCrmStatus').textContent = '';
   document.getElementById('deployModal').classList.add('open');
 }
 function closeDeployModal() { document.getElementById('deployModal').classList.remove('open'); }
@@ -1970,10 +1995,19 @@ function assignFromWheel() {
   document.getElementById('dDate').value  = selectedDate();
   document.getElementById('dTitle').value = '배포지원';
   checkDeployConflict();
+  // CRM 섹션에 당첨자 이름 설정
+  const winnerName = lastWinner?.name || '';
+  document.getElementById('deployCrmWinnerLabel').textContent = winnerName;
   document.getElementById('deployModal').classList.add('open');
 }
 
 // ── 투입 모달: 일정 충돌 감지 ─────────────────────────────────────────────
+function updateDeployCrmLabel() {
+  const memberId = parseInt(document.getElementById('dMember').value);
+  const m = MEMBERS.find(x => x.id === memberId);
+  if (m) document.getElementById('deployCrmWinnerLabel').textContent = m.name;
+}
+
 function checkDeployConflict() {
   const memberId = parseInt(document.getElementById('dMember').value);
   const dateStr  = document.getElementById('dDate').value;
@@ -2068,6 +2102,65 @@ async function updateCrmAssignee() {
 
 function showCrmStatus(msg, type) {
   const el = document.getElementById('crmStatus');
+  el.textContent = msg;
+  el.className = 'crm-status' + (type ? ' ' + type : '');
+}
+
+// ── 배포 모달 vtiger CRM 연동 ─────────────────────────────────────────
+let deployCrmCurrentTicket = null;
+
+async function lookupDeployCrmTicket() {
+  const tid = document.getElementById('deployCrmTicketId').value.trim();
+  if (!tid) return;
+  const btn = document.getElementById('deployCrmLookupBtn');
+  btn.textContent = '조회 중...'; btn.disabled = true;
+  showDeployCrmStatus('', '');
+  try {
+    const res = await fetch(WORKER_URL, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json','X-Action':'vtiger-get-ticket'},
+      body: JSON.stringify({ticketId: tid}),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '조회 실패');
+    deployCrmCurrentTicket = data;
+    document.getElementById('deployCrmTicketTitle').textContent = data.title;
+    document.getElementById('deployCrmCurrentAssignee').textContent = data.assigneeId || '—';
+    const link = document.getElementById('deployCrmTicketLink');
+    link.href = data.ticketUrl; link.style.display = 'inline';
+    document.getElementById('deployCrmTicketCard').classList.add('visible');
+  } catch(e) {
+    showDeployCrmStatus('오류: ' + e.message, 'error');
+  } finally {
+    btn.textContent = '조회'; btn.disabled = false;
+  }
+}
+
+async function updateDeployCrmAssignee() {
+  const memberId = parseInt(document.getElementById('dMember').value);
+  const member = MEMBERS.find(m => m.id === memberId);
+  if (!deployCrmCurrentTicket || !member || !WORKER_URL) return;
+  const btn = document.getElementById('deployCrmAssignBtn');
+  btn.textContent = '변경 중...'; btn.disabled = true;
+  try {
+    const res = await fetch(WORKER_URL, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json','X-Action':'vtiger-update-ticket'},
+      body: JSON.stringify({ticketId: deployCrmCurrentTicket.id, memberName: member.name}),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '변경 실패');
+    showDeployCrmStatus('✅ 담당자 변경 완료!', 'success');
+  } catch(e) {
+    showDeployCrmStatus('오류: ' + e.message, 'error');
+  } finally {
+    btn.textContent = `🎯 ${member.name}님으로 담당자 변경`;
+    btn.disabled = false;
+  }
+}
+
+function showDeployCrmStatus(msg, type) {
+  const el = document.getElementById('deployCrmStatus');
   el.textContent = msg;
   el.className = 'crm-status' + (type ? ' ' + type : '');
 }
