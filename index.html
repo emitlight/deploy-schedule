@@ -671,7 +671,53 @@
   }
   .crm-status.error { color: #e53935; }
   .crm-status.success { color: #43a047; font-weight: 600; }
+
+  /* ── 사용가이드 모달 ─────────────────────────────────────────────── */
+  .guide-modal-overlay {
+    display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5);
+    z-index:2000; align-items:center; justify-content:center;
+  }
+  .guide-modal-overlay.open { display:flex; }
+  .guide-modal {
+    background:#fff; border-radius:16px; width:min(760px,95vw);
+    max-height:88vh; display:flex; flex-direction:column;
+    box-shadow:0 8px 40px rgba(0,0,0,0.18);
+  }
+  .guide-modal-header {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:16px 24px; border-bottom:1px solid #e8eaf6;
+    font-weight:700; font-size:16px; color:#1a237e;
+  }
+  .guide-modal-body {
+    padding:24px; overflow-y:auto; line-height:1.75; color:#333;
+    font-size:14px;
+  }
+  .guide-modal-body h1 { font-size:20px; color:#1a237e; margin-bottom:8px; }
+  .guide-modal-body h2 { font-size:15px; color:#283593; margin:20px 0 8px;
+    border-bottom:1px solid #e8eaf6; padding-bottom:4px; }
+  .guide-modal-body h3 { font-size:13px; color:#3949ab; margin:14px 0 6px; }
+  .guide-modal-body code {
+    background:#f3f4ff; border-radius:4px; padding:1px 6px;
+    font-size:12px; color:#c62828; font-family:monospace;
+  }
+  .guide-modal-body pre {
+    background:#f3f4ff; border-radius:8px; padding:12px 16px;
+    overflow-x:auto; margin:8px 0;
+  }
+  .guide-modal-body pre code { background:none; color:#1a237e; padding:0; }
+  .guide-modal-body table {
+    width:100%; border-collapse:collapse; margin:10px 0; font-size:13px;
+  }
+  .guide-modal-body th { background:#e8eaf6; padding:6px 10px; text-align:left; }
+  .guide-modal-body td { padding:6px 10px; border-bottom:1px solid #f0f0f0; }
+  .guide-modal-body blockquote {
+    border-left:3px solid #7986cb; margin:8px 0; padding:6px 12px;
+    background:#f8f9ff; color:#555; border-radius:0 6px 6px 0;
+  }
+  .guide-modal-body ul, .guide-modal-body ol { padding-left:20px; }
+  .guide-modal-body hr { border:none; border-top:1px solid #e8eaf6; margin:16px 0; }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
 </head>
 <body>
 
@@ -685,7 +731,8 @@
     <button class="btn btn-white" onclick="openRoulette()">🎲 라운드로빈 돌림판</button>
     <button class="btn btn-white" id="toggleFreeBtn" onclick="toggleFreeSlots()">🟢 빈 시간 보기</button>
     <button class="btn btn-outlook" id="syncBtn" onclick="syncOutlook()">☁️ 아웃룩 동기화</button>
-    <button class="btn btn-deploy" onclick="openDeployModal()">🚀 배포지원 투입</button>
+    <button class="btn" onclick="openGuideModal()" style="background:#fff;color:#3949ab;border:1.5px solid #c5cae9;font-weight:700;">📖 사용가이드</button>
+        <button class="btn btn-deploy" onclick="openDeployModal()">🚀 배포지원 투입</button>
   </div>
 </div>
 
@@ -2034,6 +2081,159 @@ function showCrmStatus(msg, type) {
 
 // 초기 렌더링
 render();
+
+// ── 사용가이드 모달 ────────────────────────────────────────────────────
+const GUIDE_MD = `# 🚀 배포지원 투입관리 대시보드 사용가이드
+
+**접속 주소:** https://emitlight.github.io/deploy-schedule/
+
+---
+
+## 처음 접속했을 때
+
+페이지에 처음 들어오면 **아무 일정도 없는 빈 달력**이 보입니다. 정상입니다.  
+아래 순서대로 한 번만 설정하면 이후에는 자동으로 데이터가 채워집니다.
+
+---
+
+## 1단계 — Worker URL 연결 (최초 1회)
+
+> 이 설정은 처음 한 번만 하면 됩니다. 브라우저에 저장되어 이후엔 자동 적용됩니다.
+
+1. 헤더의 **☁️ 아웃룩 동기화** 버튼 클릭
+2. 팝업이 뜨면 아래 URL을 그대로 복사해서 붙여넣기 후 확인
+
+\`\`\`
+https://deploycalendar.hayoung-lee.workers.dev
+\`\`\`
+
+3. 페이지가 자동으로 새로고침되며 동기화가 시작됩니다
+
+---
+
+## 2단계 — 아웃룩 일정 불러오기
+
+> 아웃룩 일정은 매일 **오전 7시 · 낮 12시 30분 · 오후 3시**에 자동으로 동기화됩니다.  
+> 처음 접속했을 때는 수동으로 한 번 불러와야 합니다.
+
+헤더의 **☁️ 아웃룩 동기화** 버튼 클릭 → 잠시 기다리면 8명의 일정이 달력에 표시됩니다.
+
+---
+
+## 3단계 — 화면 보는 법
+
+\`\`\`
+◀ 2026년 6월 2일 – 6일 ▶     [월][화][수][목][금]
+─────────────────────────────────────────────────
+           이송민  이하영  강진혁  김선우  김요엘  윤이나  이정기  김정환
+09:00  │
+10:00  │   🔵회의                  🔵회의
+11:00  │
+...
+\`\`\`
+
+| 색상 | 의미 |
+|------|------|
+| 🔵 파랑 | 회의·아웃룩 일정 |
+| 🔴 빨강 | 배포지원 투입 확정 |
+| ⚫ 검정 | 부재중·OOF |
+| 🟤 갈색 | 기타 |
+
+- **◀ ▶** 버튼으로 주 이동
+- **요일 탭** 클릭으로 해당 날짜만 보기
+- **🟢 빈 시간 보기** 버튼으로 가능한 시간대 한눈에 확인
+
+---
+
+## 배포 담당자 뽑기 — 핵심 기능!
+
+### Step 1. 돌림판 열기
+
+헤더의 **🎲 라운드로빈 돌림판** 버튼 클릭
+
+### Step 2. 배포 날짜·시간 설정
+
+\`\`\`
+📅 배포 일시   2026-06-10   [09:00 ▼] ~ [18:00 ▼]
+\`\`\`
+
+날짜와 시간을 설정하면 **그 시간에 일정이 없는 사람만** 돌림판에 올라옵니다.  
+일정이 있는 사람은 자동으로 회색 처리(취소선)됩니다.
+
+### Step 3. 돌리기
+
+**🎲 돌리기!** 버튼 클릭 → 당첨자 발표 🎉
+
+> 🔄 최근에 뽑힌 사람은 자동으로 후순위로 밀립니다.  
+> 공정한 순환 배정이 자동으로 유지됩니다.
+
+### Step 4. 배포 일정 확정
+
+당첨 후 **🚀 이 멤버로 배포지원 일정 투입하기** 클릭  
+→ 자동으로 폼이 채워집니다. 고객사/프로젝트명만 입력 후 **투입 확정**  
+→ 달력에 🔴 빨간색으로 표시되고 팀 전원에게 공유됩니다.
+
+### (선택) vtiger CRM 티켓 연동
+
+당첨 직후 **🔗 vtiger CRM 티켓 연동** 섹션에서  
+티켓 번호 입력 → 조회 → **담당자 자동 변경** 가능
+
+---
+
+## 일정 직접 추가
+
+아웃룩에 없는 일정을 수동으로 등록할 수 있습니다.
+
+1. 달력의 **빈 칸 클릭** → 일정 추가 팝업
+2. 제목·시간·종류 입력 후 저장
+3. 저장된 일정은 Notion에 자동 저장 → 팀 전원이 바로 확인 가능
+
+---
+
+## 자주 묻는 질문
+
+**Q. 아웃룩 일정이 안 보여요.**  
+A. **☁️ 아웃룩 동기화** 버튼을 눌러 수동으로 불러오세요.
+
+**Q. 돌림판에 내가 안 나와요.**  
+A. 설정한 배포 시간대에 내 일정이 잡혀 있으면 자동 제외됩니다. 시간대를 바꿔보세요.
+
+**Q. 다른 사람 PC에서 일정이 다르게 보여요.**  
+A. 페이지를 새로고침하면 Notion에서 최신 데이터를 불러옵니다.
+
+**Q. Worker URL 설정을 다시 하고 싶어요.**  
+A. **☁️ 아웃룩 동기화** 버튼을 클릭하면 URL 입력 팝업이 다시 뜹니다. 새 URL을 입력하세요.
+
+---
+
+*문의: 이하영 hayoung.lee@softcamp.co.kr*
+`;
+
+function openGuideModal() {
+  document.getElementById('guideModalBody').innerHTML =
+    typeof marked !== 'undefined' ? marked.parse(GUIDE_MD) : '<pre>' + GUIDE_MD + '</pre>';
+  document.getElementById('guideModal').classList.add('open');
+}
+function closeGuideModal() {
+  document.getElementById('guideModal').classList.remove('open');
+}
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('guideModal')?.addEventListener('click', function(e) {
+    if (e.target === this) closeGuideModal();
+  });
+});
+
 </script>
+
+  <!-- 사용가이드 모달 -->
+  <div class="guide-modal-overlay" id="guideModal">
+    <div class="guide-modal">
+      <div class="guide-modal-header">
+        📖 사용가이드
+        <button onclick="closeGuideModal()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#888;">✕</button>
+      </div>
+      <div class="guide-modal-body" id="guideModalBody"></div>
+    </div>
+  </div>
 </body>
 </html>
