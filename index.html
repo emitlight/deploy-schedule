@@ -679,7 +679,7 @@
 <div class="header">
   <div class="header-left">
     <h1>🚀 본부 멤버 배포지원 투입관리 대시보드</h1>
-    <p>Partner / Appliance / Security 365 Platform부 · 5명</p>
+    <p>Partner / Appliance / Security 365 Platform부 · 8명</p>
   </div>
   <div class="header-right">
     <button class="btn btn-white" onclick="openRoulette()">🎲 라운드로빈 돌림판</button>
@@ -1460,7 +1460,8 @@ function saveData() { saveDataLocal(); }  // 하위호환 alias
 
 // ── Notion에서 모든 이벤트 로드 (앱 시작 + 수동 동기화 후) ──────────────
 async function loadEventsFromNotion() {
-  if (!WORKER_URL) return;
+  // 이미 로컬에 데이터가 있으면 Notion 로드 생략 (덮어쓰기 방지)
+  if (!WORKER_URL || events.length > 0) return;
   try {
     const res = await fetch(WORKER_URL, {
       method:  'POST',
@@ -1469,7 +1470,10 @@ async function loadEventsFromNotion() {
     });
     if (!res.ok) return;
     const data = await res.json();
-    if (!data.ok || !Array.isArray(data.events)) return;
+    if (!data.ok || !Array.isArray(data.events) || data.events.length === 0) return;
+    // 여러 멤버 데이터가 있을 때만 적용 (부분 데이터 방지)
+    const memberCount = new Set(data.events.map(e => e.memberId)).size;
+    if (memberCount < 2) return;
     events = data.events;
     saveDataLocal();
     render();
@@ -1526,38 +1530,35 @@ async function syncOutlook() {
   btn.textContent = '☁️ 동기화 중...';
 
   try {
-    // 현재 주 전체를 동기화 (이전 주 ~ 다음 4주)
+    // 아웃룩에서 직접 동기화 (화면 표시용)
     const start = new Date(currentWeekStart);
     start.setDate(start.getDate() - 7);
     const end = new Date(currentWeekStart);
     end.setDate(end.getDate() + 28);
 
-    // 1) 서버 측에서 아웃룩 → Notion 동기화 실행
-    const syncRes = await fetch(WORKER_URL, {
+    const res = await fetch(WORKER_URL, {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Action': 'run-sync' },
-      body:    '{}',
+      headers: { 'Content-Type': 'application/json', 'X-Action': 'sync-outlook' },
+      body:    JSON.stringify({ startDate: fmtDate(start), endDate: fmtDate(end) }),
     });
-    if (!syncRes.ok) throw new Error(`Worker 오류 ${syncRes.status}: ${await syncRes.text()}`);
-
-    // 2) Notion에서 갱신된 이벤트 전체 로드
-    const loadRes = await fetch(WORKER_URL, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Action': 'load-events' },
-      body:    '{}',
-    });
-    if (!loadRes.ok) throw new Error(`이벤트 로드 실패 ${loadRes.status}`);
-    const loadData = await loadRes.json();
-    if (loadData.ok && Array.isArray(loadData.events)) {
-      events = loadData.events;
-      saveDataLocal();
-    }
+    if (!res.ok) throw new Error(`Worker 오류 ${res.status}`);
+    const { events: outlookEvents } = await res.json();
+    events = events.filter(e => !e.fromOutlook);
+    events = events.concat(outlookEvents || []);
+    saveDataLocal();
 
     lastSyncTime = new Date().toLocaleString('ko-KR');
     localStorage.setItem('lastSyncTime', lastSyncTime);
 
     render();
-    showToast(`☁️ 아웃룩 동기화 완료 — ${loadData.events?.length ?? 0}개 일정`);
+    showToast(`☁️ 아웃룩 동기화 완료 — ${outlookEvents?.length ?? 0}개 일정`);
+
+    // Notion 백그라운드 저장 (실패해도 UI에 영향 없음)
+    fetch(WORKER_URL, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json','X-Action':'run-sync'},
+      body: '{}'
+    }).catch(()=>{});
 
   } catch (err) {
     console.error(err);
