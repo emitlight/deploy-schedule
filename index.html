@@ -429,15 +429,9 @@
     background: #f5f5f5; color: #777; border: 1.5px solid #e8e8e8;
     transition: all 0.2s;
   }
-  .rr-item.next   { background: #e8f5e9; color: #2e7d32; border-color: #a5d6a7; }
   .rr-item.avail  { background: #f0f4ff; color: #1a237e; border-color: #c5cae9; }
   .rr-item.unavail { background: #fafafa; color: #c0c4d0; border-color: #eeeeee;
                      text-decoration: line-through; font-size: 11px; }
-  .rr-next-badge {
-    font-size: 8px; background: #43a047; color: white;
-    border-radius: 6px; padding: 1px 5px; margin-right: 3px;
-    font-weight: 700; vertical-align: middle;
-  }
   .rr-conflict-hint { font-size: 8px; color: #ccc; display: block; text-decoration: none; }
   .rr-rule-note {
     text-align: center; font-size: 11px; color: #7986cb;
@@ -892,7 +886,7 @@
       </div>
       <p class="rr-info" id="rrInfo"></p>
       <div class="rr-queue-section">
-        <div class="rr-queue-label">라운드로빈 순서 (← 다음 차례)</div>
+        <div class="rr-queue-label">배포 가능 멤버</div>
         <div class="rr-queue" id="rrQueue"></div>
       </div>
       <div class="rr-rule-note">
@@ -1767,7 +1761,6 @@ function renderAvailableMembers() {
     const m = MEMBERS.find(x => x.id === id);
     if (!m) return '';
     const avail  = isMemberAvailable(m.id, dateStr, depStart, depEnd);
-    const isNext = avail && wheelSlices[0]?.id === id;
 
     let conflictTxt = '';
     if (!avail) {
@@ -1777,9 +1770,9 @@ function renderAvailableMembers() {
       );
       conflictTxt = cs.map(e => `${e.startTime}~${e.endTime}`).join(', ');
     }
-    return `<div class="rr-item ${avail ? (isNext ? 'next' : 'avail') : 'unavail'}"
+    return `<div class="rr-item ${avail ? 'avail' : 'unavail'}"
       title="${avail ? '배포 가능' : '충돌: ' + conflictTxt}">
-      ${isNext ? '<span class="rr-next-badge">●</span>' : ''}
+
       ${m.name}
       ${!avail && conflictTxt ? `<span class="rr-conflict-hint">${conflictTxt}</span>` : ''}
     </div>`;
