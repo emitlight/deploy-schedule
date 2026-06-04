@@ -792,7 +792,7 @@
     </div>
     <div class="form-group">
       <label>유형</label>
-      <select id="fType">
+      <select id="fType" onchange="toggleEventCrmByType()">
         <option value="meeting">🟣 회의/미팅</option>
         <option value="deploy">🔴 배포지원</option>
         <option value="out">⚫ 외근/휴가</option>
@@ -813,6 +813,26 @@
       <label>메모 (선택)</label>
       <textarea id="fNote" rows="2" placeholder="참석자, 장소 등..."></textarea>
     </div>
+    <!-- 배포 일정 vtiger CRM 연동 섹션 (deploy 타입일 때만 표시) -->
+    <div class="crm-section" id="eventCrmSection">
+      <div class="crm-header">🔗 vtiger CRM 티켓 연동</div>
+      <div class="crm-input-row">
+        <input type="text" id="eventCrmTicketId" placeholder="티켓 번호 (예: 12345)" />
+        <button class="btn btn-primary" onclick="lookupEventCrmTicket()" id="eventCrmLookupBtn">조회</button>
+      </div>
+      <div class="crm-ticket-card" id="eventCrmTicketCard">
+        <div class="crm-ticket-title" id="eventCrmTicketTitle"></div>
+        <div class="crm-ticket-meta">
+          <span>현재 담당자: <strong id="eventCrmCurrentAssignee">—</strong></span>
+          <a class="crm-ticket-link" id="eventCrmTicketLink" href="#" target="_blank">티켓 열기 ↗</a>
+        </div>
+        <button class="crm-assign-btn" id="eventCrmAssignBtn" onclick="updateEventCrmAssignee()">
+          🎯 <span id="eventCrmWinnerLabel">담당자</span>님으로 담당자 변경
+        </button>
+      </div>
+      <div class="crm-status" id="eventCrmStatus"></div>
+    </div>
+
     <div class="modal-actions">
       <button class="btn btn-danger" id="deleteBtn" onclick="deleteEvent()" style="margin-right:auto;display:none;">삭제</button>
       <button class="btn btn-secondary" onclick="closeModal()">취소</button>
@@ -1314,6 +1334,19 @@ function openEventModal(memberId, date, startTime, ev=null) {
   document.getElementById('fNote').value  = ev ? (ev.note||'') : '';
   document.getElementById('modalTitle').textContent = ev ? '일정 수정' : '일정 추가';
   document.getElementById('deleteBtn').style.display = ev ? 'inline-flex' : 'none';
+
+  // 배포 타입이면 CRM 섹션 표시
+  const isDeployType = (ev?.type === 'deploy') || (document.getElementById('fType').value === 'deploy');
+  const crmSection = document.getElementById('eventCrmSection');
+  crmSection.classList.toggle('visible', isDeployType);
+  document.getElementById('eventCrmTicketCard').classList.remove('visible');
+  document.getElementById('eventCrmTicketId').value = '';
+  document.getElementById('eventCrmStatus').textContent = '';
+  if (isDeployType) {
+    const m = MEMBERS.find(x => x.id === (ev?.memberId || parseInt(document.getElementById('fMember').value)));
+    if (m) document.getElementById('eventCrmWinnerLabel').textContent = m.name;
+  }
+
   document.getElementById('eventModal').classList.add('open');
 }
 function closeModal() {
@@ -2161,6 +2194,73 @@ async function updateDeployCrmAssignee() {
 
 function showDeployCrmStatus(msg, type) {
   const el = document.getElementById('deployCrmStatus');
+  el.textContent = msg;
+  el.className = 'crm-status' + (type ? ' ' + type : '');
+}
+
+// ── 일정 수정 모달 vtiger CRM 연동 ───────────────────────────────────
+let eventCrmCurrentTicket = null;
+
+function toggleEventCrmByType() {
+  const isDeployType = document.getElementById('fType').value === 'deploy';
+  document.getElementById('eventCrmSection').classList.toggle('visible', isDeployType);
+  const memberId = parseInt(document.getElementById('fMember').value);
+  const m = MEMBERS.find(x => x.id === memberId);
+  if (m) document.getElementById('eventCrmWinnerLabel').textContent = m.name;
+}
+
+async function lookupEventCrmTicket() {
+  const tid = document.getElementById('eventCrmTicketId').value.trim();
+  if (!tid || !WORKER_URL) return;
+  const btn = document.getElementById('eventCrmLookupBtn');
+  btn.textContent = '조회 중...'; btn.disabled = true;
+  showEventCrmStatus('', '');
+  try {
+    const res = await fetch(WORKER_URL, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json','X-Action':'vtiger-get-ticket'},
+      body: JSON.stringify({ticketId: tid}),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '조회 실패');
+    eventCrmCurrentTicket = data;
+    document.getElementById('eventCrmTicketTitle').textContent = data.title;
+    document.getElementById('eventCrmCurrentAssignee').textContent = data.assigneeId || '—';
+    const link = document.getElementById('eventCrmTicketLink');
+    link.href = data.ticketUrl;
+    document.getElementById('eventCrmTicketCard').classList.add('visible');
+  } catch(e) {
+    showEventCrmStatus('오류: ' + e.message, 'error');
+  } finally {
+    btn.textContent = '조회'; btn.disabled = false;
+  }
+}
+
+async function updateEventCrmAssignee() {
+  const memberId = parseInt(document.getElementById('fMember').value);
+  const member = MEMBERS.find(m => m.id === memberId);
+  if (!eventCrmCurrentTicket || !member || !WORKER_URL) return;
+  const btn = document.getElementById('eventCrmAssignBtn');
+  btn.textContent = '변경 중...'; btn.disabled = true;
+  try {
+    const res = await fetch(WORKER_URL, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json','X-Action':'vtiger-update-ticket'},
+      body: JSON.stringify({ticketId: eventCrmCurrentTicket.id, memberName: member.name}),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '변경 실패');
+    showEventCrmStatus('✅ 담당자 변경 완료!', 'success');
+  } catch(e) {
+    showEventCrmStatus('오류: ' + e.message, 'error');
+  } finally {
+    btn.textContent = `🎯 ${member.name}님으로 담당자 변경`;
+    btn.disabled = false;
+  }
+}
+
+function showEventCrmStatus(msg, type) {
+  const el = document.getElementById('eventCrmStatus');
   el.textContent = msg;
   el.className = 'crm-status' + (type ? ' ' + type : '');
 }
