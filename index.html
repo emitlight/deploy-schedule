@@ -179,6 +179,7 @@
 
   /* ── Main Grid ── */
   .main { padding: 16px 24px; overflow-x: auto; }
+  .grid-header, .allday-row, .timed-slot-row { min-width: 720px; }
   .grid-container {
     background: white; border-radius: 10px;
     box-shadow: 0 2px 8px rgba(0,0,0,0.08);
@@ -188,7 +189,7 @@
   /* column header */
   .grid-header {
     display: grid;
-    grid-template-columns: 64px repeat(5, 1fr);
+    grid-template-columns: 64px repeat(8, minmax(0,1fr));
     background: #f5f5f5; border-bottom: 2px solid #e0e0e0;
   }
   .grid-header-time { padding: 12px 8px; text-align: center; font-size: 11px; color: #999; }
@@ -222,7 +223,7 @@
   .grid-body { position: relative; }
   .time-row {
     display: grid;
-    grid-template-columns: 64px repeat(5, 1fr);
+    grid-template-columns: 64px repeat(8, minmax(0,1fr));
     border-bottom: 1px solid #f0f0f0; min-height: 48px;
   }
   .time-row:last-child { border-bottom: none; }
@@ -280,7 +281,7 @@
   /* ── 하루종일 행 ── */
   .allday-row {
     display: grid;
-    grid-template-columns: 64px repeat(5, 1fr);
+    grid-template-columns: 64px repeat(8, minmax(0,1fr));
     border-bottom: 2px solid #dde1f0;
     background: #f7f8fd;
     min-height: 34px;
@@ -306,7 +307,7 @@
   /* ── 시간 슬롯 행 (배경 그리드) ── */
   .timed-slot-row {
     display: grid;
-    grid-template-columns: 64px repeat(5, 1fr);
+    grid-template-columns: 64px repeat(8, minmax(0,1fr));
     border-bottom: 1px solid #ededf5; /* 정시 하단 */
     height: 44px;
   }
@@ -327,7 +328,7 @@
   /* ── 이벤트 오버레이 (절대 위치) ── */
   .events-overlay {
     position: absolute; top: 0; left: 64px; right: 0; bottom: 0;
-    display: grid; grid-template-columns: repeat(5, 1fr);
+    display: grid; grid-template-columns: repeat(8, minmax(0,1fr));
     pointer-events: none;
   }
   .member-events-col { position: relative; pointer-events: none; }
@@ -572,9 +573,9 @@
     .member-team, .member-dept { font-size: 9px; }
 
     /* 시간 컬럼 */
-    .grid-header { grid-template-columns: 54px repeat(5, 1fr); }
-    .allday-row  { grid-template-columns: 54px repeat(5, 1fr); }
-    .timed-slot-row { grid-template-columns: 54px repeat(5, 1fr); }
+    .grid-header { grid-template-columns: 54px repeat(8, minmax(0,1fr)); }
+    .allday-row  { grid-template-columns: 54px repeat(8, minmax(0,1fr)); }
+    .timed-slot-row { grid-template-columns: 54px repeat(8, minmax(0,1fr)); }
     .events-overlay { left: 54px; }
     .grid-header-time { padding: 8px 4px; }
     .time-label { font-size: 10px; padding: 0 4px; padding-top: 4px; }
@@ -602,9 +603,9 @@
     .grid-container { min-width: 580px; }
 
     /* 시간 컬럼 더 축소 */
-    .grid-header { grid-template-columns: 44px repeat(5, 1fr); }
-    .allday-row  { grid-template-columns: 44px repeat(5, 1fr); }
-    .timed-slot-row { grid-template-columns: 44px repeat(5, 1fr); }
+    .grid-header { grid-template-columns: 44px repeat(8, minmax(0,1fr)); }
+    .allday-row  { grid-template-columns: 44px repeat(8, minmax(0,1fr)); }
+    .timed-slot-row { grid-template-columns: 44px repeat(8, minmax(0,1fr)); }
     .events-overlay { left: 44px; }
     .time-label { font-size: 9px; padding: 0 2px; padding-top: 3px; }
 
@@ -678,7 +679,7 @@
 <div class="header">
   <div class="header-left">
     <h1>🚀 본부 멤버 배포지원 투입관리 대시보드</h1>
-    <p>Partner / Appliance / Security 365 Platform부 · 8명</p>
+    <p>Partner / Appliance / Security 365 Platform부 · 5명</p>
   </div>
   <div class="header-right">
     <button class="btn btn-white" onclick="openRoulette()">🎲 라운드로빈 돌림판</button>
