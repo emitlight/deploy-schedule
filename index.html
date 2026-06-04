@@ -1,0 +1,2037 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>본부 멤버 배포지원 투입관리 대시보드</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', 'Apple SD Gothic Neo', sans-serif; background: #f0f2f5; color: #1a1a2e; }
+
+  /* ── Header ── */
+  .header {
+    background: linear-gradient(135deg, #1a237e 0%, #283593 60%, #3949ab 100%);
+    color: white; padding: 16px 24px;
+    display: flex; align-items: center; justify-content: space-between;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  }
+  .header-left h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
+  .header-left p  { font-size: 12px; opacity: 0.75; margin-top: 2px; }
+  .header-right   { display: flex; gap: 10px; align-items: center; }
+
+  .btn {
+    padding: 7px 14px; border: none; border-radius: 6px;
+    font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s;
+  }
+  .btn-white  { background: white; color: #1a237e; }
+  .btn-white:hover  { background: #e8eaf6; }
+  .btn-deploy  { background: #e53935; color: white; }
+  .btn-deploy:hover  { background: #c62828; }
+  .btn-outlook { background: #0078d4; color: white; }
+  .btn-outlook:hover { background: #005fa3; }
+  .btn-outlook.syncing { opacity: 0.7; cursor: not-allowed; }
+
+  /* Outlook 이벤트 스타일 */
+  .event-meeting.from-outlook { border-left-color: #0078d4; }
+  .outlook-badge {
+    font-size: 8px; background: #0078d4; color: white;
+    border-radius: 3px; padding: 0px 4px; margin-left: 3px;
+    vertical-align: middle; font-weight: 700;
+  }
+  .sync-status {
+    font-size: 11px; color: #888; margin-left: 8px;
+  }
+  .btn-primary { background: #1a237e; color: white; }
+  .btn-primary:hover { background: #283593; }
+  .btn-secondary { background: #e0e0e0; color: #333; }
+  .btn-secondary:hover { background: #bdbdbd; }
+  .btn-danger { background: #ffebee; color: #c62828; border: 1px solid #ffcdd2; }
+  .btn-danger:hover { background: #ffcdd2; }
+
+  /* ── Week Nav ── */
+  .nav-wrapper { position: relative; }
+  .week-nav {
+    background: white; padding: 10px 24px;
+    display: flex; align-items: center; gap: 10px;
+    border-bottom: 1px solid #e0e0e0;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+  }
+  .week-nav-btn {
+    width: 30px; height: 30px; border: 1px solid #e0e0e0;
+    background: white; border-radius: 6px; cursor: pointer;
+    font-size: 16px; display: flex; align-items: center; justify-content: center;
+    transition: all 0.15s; color: #555; flex-shrink: 0;
+  }
+  .week-nav-btn:hover { background: #f5f5f5; border-color: #bbb; }
+
+  /* month label button (opens calendar) */
+  .month-label-btn {
+    font-size: 14px; font-weight: 700; color: #1a237e;
+    background: none; border: 1px solid #e0e0e0; border-radius: 8px;
+    padding: 5px 14px; cursor: pointer; min-width: 190px; text-align: center;
+    transition: all 0.15s; display: flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .month-label-btn:hover { background: #f0f4ff; border-color: #3949ab; }
+  .month-label-btn.open  { background: #e8eaf6; border-color: #3949ab; }
+  .cal-arrow { font-size: 10px; color: #888; transition: transform 0.2s; }
+  .month-label-btn.open .cal-arrow { transform: rotate(180deg); }
+
+  .day-tabs   { display: flex; gap: 5px; margin-left: auto; }
+  .day-tab {
+    padding: 5px 12px; border: 1px solid #e0e0e0;
+    background: white; border-radius: 20px; cursor: pointer;
+    font-size: 12px; font-weight: 500; transition: all 0.15s; color: #555;
+  }
+  .day-tab:hover   { border-color: #3949ab; color: #3949ab; }
+  .day-tab.active  { background: #1a237e; color: white; border-color: #1a237e; }
+  .day-tab.today   { border-color: #e53935; color: #e53935; font-weight: 700; }
+  .day-tab.today.active { background: #e53935; color: white; border-color: #e53935; }
+
+  /* ── Calendar Popup ── */
+  .cal-popup {
+    position: absolute; top: calc(100% + 8px); left: 18px;
+    background: white; border-radius: 18px; padding: 18px;
+    box-shadow: 0 20px 60px rgba(26,35,126,0.18), 0 4px 16px rgba(0,0,0,0.06);
+    width: 318px; z-index: 200; display: none;
+    animation: calFadeIn 0.18s cubic-bezier(.22,.68,0,1.2);
+    border: 1px solid rgba(26,35,126,0.09);
+  }
+  .cal-popup.open { display: block; }
+  @keyframes calFadeIn {
+    from { opacity: 0; transform: translateY(-10px) scale(0.97); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  .cal-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 16px; padding: 0 2px;
+  }
+  .cal-header-label { font-weight: 800; font-size: 16px; color: #1a237e; letter-spacing: -0.4px; }
+  .cal-nav {
+    width: 34px; height: 34px; border: none;
+    background: #f0f2ff; border-radius: 10px; cursor: pointer;
+    font-size: 17px; display: flex; align-items: center; justify-content: center;
+    transition: all 0.15s; color: #3949ab; font-weight: 700;
+  }
+  .cal-nav:hover { background: #e8eaf6; transform: scale(1.08); }
+  .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+  .cal-day-hdr {
+    text-align: center; font-size: 10px; color: #9fa6c8; padding: 2px 0 10px;
+    font-weight: 800; letter-spacing: 0.4px;
+  }
+  .cal-day-hdr.sun { color: #ef9a9a; }
+  .cal-day-hdr.sat { color: #90caf9; }
+  .cal-day {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    border-radius: 10px; cursor: pointer; font-size: 13px;
+    transition: all 0.12s; position: relative; font-weight: 500;
+    color: #3a3a5c; aspect-ratio: 1; min-height: 34px;
+  }
+  .cal-day:hover:not(.other-month) {
+    background: #eef0ff; color: #1a237e; transform: scale(1.08);
+  }
+  .cal-day.other-month { color: #dde0ee; cursor: default; pointer-events: none; }
+  .cal-day.sun:not(.other-month) { color: #e57373; }
+  .cal-day.sat:not(.other-month) { color: #64b5f6; }
+  .cal-day.is-today {
+    background: linear-gradient(135deg,#fff3e0,#ffe0b2);
+    color: #e65100 !important; font-weight: 800;
+    box-shadow: 0 0 0 2.5px #ff9800;
+  }
+  .cal-day.in-selected-week:not(.other-month):not(.is-selected) {
+    background: #f0f2ff; border-radius: 6px;
+  }
+  .cal-day.is-selected {
+    background: linear-gradient(135deg,#1a237e,#3949ab) !important;
+    color: white !important; font-weight: 700;
+    border-radius: 50% !important;
+    box-shadow: 0 4px 16px rgba(26,35,126,0.45) !important;
+    transform: scale(1.1) !important;
+  }
+  .cal-dot {
+    width: 5px; height: 5px; background: #e53935; border-radius: 50%;
+    position: absolute; bottom: 2px;
+    box-shadow: 0 0 0 1px white;
+  }
+  .cal-today-btn {
+    margin-top: 14px; width: 100%; padding: 9px; border: none;
+    background: linear-gradient(135deg,#f0f2ff,#e8eaf6);
+    border-radius: 10px; font-size: 12px; font-weight: 700;
+    color: #1a237e; cursor: pointer; transition: all 0.15s; letter-spacing: 0.3px;
+  }
+  .cal-today-btn:hover {
+    background: #e8eaf6; box-shadow: 0 2px 8px rgba(26,35,126,0.12);
+    transform: translateY(-1px);
+  }
+
+  /* ── Legend ── */
+  .legend {
+    background: white; padding: 8px 24px;
+    display: flex; align-items: center; gap: 20px;
+    border-bottom: 1px solid #e0e0e0; flex-wrap: wrap;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #555; }
+  .legend-dot  { width: 12px; height: 12px; border-radius: 3px; }
+  .dot-meeting  { background: #5c6bc0; }
+  .dot-deploy   { background: #e53935; }
+  .dot-out      { background: #78909c; }
+  .dot-other    { background: #8d6e63; }
+  .dot-free     { background: #e8f5e9; border: 1px solid #a5d6a7; }
+
+  /* ── Main Grid ── */
+  .main { padding: 16px 24px; overflow-x: auto; }
+  .grid-container {
+    background: white; border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    overflow: hidden; min-width: 820px; /* 900→820, 모바일은 미디어쿼리로 축소 */
+  }
+
+  /* column header */
+  .grid-header {
+    display: grid;
+    grid-template-columns: 64px repeat(5, 1fr);
+    background: #f5f5f5; border-bottom: 2px solid #e0e0e0;
+  }
+  .grid-header-time { padding: 12px 8px; text-align: center; font-size: 11px; color: #999; }
+  .member-col-header {
+    padding: 12px 10px; border-left: 1px solid #e0e0e0;
+    display: flex; flex-direction: column; gap: 2px;
+    transition: background 0.3s, box-shadow 0.3s;
+  }
+  .member-name  { font-size: 14px; font-weight: 700; color: #1a237e; display: inline-block; border-radius: 4px; padding: 1px 3px; }
+  .member-team  { font-size: 10px; color: #888; }
+  .member-dept  { font-size: 10px; color: #aaa; margin-top: 1px; }
+
+  /* Flash animation for free members */
+  @keyframes flashFree {
+    0%   { color: #1a237e; background: transparent; }
+    20%  { color: #fff; background: #43a047; box-shadow: 0 0 0 3px #a5d6a7; }
+    40%  { color: #1a237e; background: transparent; }
+    60%  { color: #fff; background: #43a047; box-shadow: 0 0 0 3px #a5d6a7; }
+    80%  { color: #1a237e; background: transparent; }
+    100% { color: #fff; background: #43a047; box-shadow: 0 0 0 3px #a5d6a7; }
+  }
+  @keyframes flashFreeOff {
+    from { color: #fff; background: #43a047; }
+    to   { color: #1a237e; background: transparent; }
+  }
+  .member-name.flashing {
+    animation: flashFree 1.2s ease forwards;
+  }
+
+  /* time rows */
+  .grid-body { position: relative; }
+  .time-row {
+    display: grid;
+    grid-template-columns: 64px repeat(5, 1fr);
+    border-bottom: 1px solid #f0f0f0; min-height: 48px;
+  }
+  .time-row:last-child { border-bottom: none; }
+  .time-row.half-hour  { min-height: 40px; border-bottom: 1px dashed #f5f5f5; }
+  .time-label {
+    padding: 0 6px 0 8px; display: flex; align-items: flex-start;
+    padding-top: 5px; font-size: 11px; color: #a0a8c0;
+    border-right: 1px solid #e8eaf0; font-weight: 600;
+    position: relative; /* 정시 틱 마크용 */
+  }
+  .time-label.half { color: #d0d5e8; font-size: 10px; font-weight: 400; }
+  /* 정시마다 오른쪽 경계 위에 굵은 틱 마크 */
+  .time-label:not(.half)::after {
+    content: '';
+    position: absolute;
+    right: -5px; top: 0;
+    width: 5px; height: 2px;
+    background: #b0b8d8;
+    border-radius: 1px;
+  }
+
+  .cell {
+    border-left: 1px solid #f0f0f0; padding: 2px;
+    position: relative; cursor: pointer; transition: background 0.1s;
+    min-height: 48px;
+  }
+  .cell:hover { background: #f3f4ff; }
+  .cell.half  { min-height: 40px; }
+
+  /* event blocks */
+  .event-block {
+    border-radius: 4px; padding: 3px 6px;
+    font-size: 11px; font-weight: 600; cursor: pointer;
+    margin: 1px; position: relative; z-index: 1;
+    transition: filter 0.1s; line-height: 1.3;
+    word-break: keep-all; overflow: hidden;
+  }
+  .event-block:hover { filter: brightness(0.92); }
+  .event-meeting { background: #e8eaf6; color: #3949ab; border-left: 3px solid #5c6bc0; }
+  .event-deploy  { background: #ffebee; color: #c62828; border-left: 3px solid #e53935; }
+  .event-out     { background: #eceff1; color: #546e7a; border-left: 3px solid #78909c; }
+  .event-other   { background: #efebe9; color: #6d4c41; border-left: 3px solid #8d6e63; }
+  .event-time { font-size: 9px; opacity: 0.7; font-weight: 400; display: block; }
+
+  /* free slot indicator */
+  .free-indicator {
+    position: absolute; inset: 2px;
+    background: #f1f8f1; border: 1px dashed #a5d6a7;
+    border-radius: 4px; display: flex; align-items: center;
+    justify-content: center; font-size: 10px; color: #66bb6a;
+    font-weight: 600; opacity: 0; transition: opacity 0.2s; pointer-events: none;
+  }
+  .show-free .free-indicator { opacity: 1; }
+
+  /* ── 하루종일 행 ── */
+  .allday-row {
+    display: grid;
+    grid-template-columns: 64px repeat(5, 1fr);
+    border-bottom: 2px solid #dde1f0;
+    background: #f7f8fd;
+    min-height: 34px;
+  }
+  .allday-label {
+    padding: 6px 4px; font-size: 10px; color: #9e9e9e; font-weight: 700;
+    border-right: 1px solid #e8eaf6;
+    display: flex; align-items: center; justify-content: center;
+    text-align: center; line-height: 1.2;
+  }
+  .allday-cell {
+    border-left: 1px solid #e8eaf6; padding: 3px 4px;
+    display: flex; flex-wrap: wrap; gap: 2px; align-items: center;
+    min-height: 34px;
+  }
+  .allday-event {
+    border-radius: 4px; padding: 2px 7px;
+    font-size: 10px; font-weight: 600; cursor: pointer;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    max-width: 100%; line-height: 1.5;
+  }
+
+  /* ── 시간 슬롯 행 (배경 그리드) ── */
+  .timed-slot-row {
+    display: grid;
+    grid-template-columns: 64px repeat(5, 1fr);
+    border-bottom: 1px solid #ededf5; /* 정시 하단 */
+    height: 44px;
+  }
+  .timed-slot-row:first-child { border-top: 1px solid #dde0ee; } /* 09:00 위 선 */
+  .timed-slot-row:last-child { border-bottom: none; }
+  /* 30분 점선 → 정시는 상단 강조선으로 구분 */
+  .timed-slot-row.half-hour { border-bottom: 1px dashed #f0f0f8; height: 38px; }
+  /* 정시 행 상단에 구분선 (첫 행 제외) */
+  .timed-slot-row:not(.half-hour):not(:first-child) {
+    border-top: 1.5px solid #d8dcea;
+  }
+  .timed-slot-col {
+    border-left: 1px solid #f0f0f0; cursor: pointer; transition: background 0.1s;
+    position: relative; /* free-indicator 기준점 */
+  }
+  .timed-slot-col:hover { background: #f3f4ff; }
+
+  /* ── 이벤트 오버레이 (절대 위치) ── */
+  .events-overlay {
+    position: absolute; top: 0; left: 64px; right: 0; bottom: 0;
+    display: grid; grid-template-columns: repeat(5, 1fr);
+    pointer-events: none;
+  }
+  .member-events-col { position: relative; pointer-events: none; }
+  .timed-event-block {
+    position: absolute; left: 3px; right: 3px;
+    border-radius: 4px; padding: 3px 6px;
+    font-size: 11px; font-weight: 600; cursor: pointer;
+    pointer-events: all; z-index: 2;
+    overflow: hidden; line-height: 1.3;
+    transition: filter 0.1s; word-break: keep-all;
+    border-left-width: 3px; border-left-style: solid;
+  }
+  .timed-event-block:hover { filter: brightness(0.92); }
+  .timed-event-block .event-time { font-size: 9px; opacity: 0.7; font-weight: 400; display: block; }
+
+  /* ── Modal ── */
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 1000; opacity: 0; pointer-events: none; transition: opacity 0.2s;
+  }
+  .modal-overlay.open { opacity: 1; pointer-events: all; }
+  .modal {
+    background: white; border-radius: 12px; padding: 24px;
+    width: 380px; box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+    transform: translateY(8px); transition: transform 0.2s;
+  }
+  .modal-overlay.open .modal { transform: translateY(0); }
+  .modal h3 { font-size: 16px; font-weight: 700; margin-bottom: 18px; color: #1a237e; }
+
+  .form-group { margin-bottom: 14px; }
+  .form-group label { display: block; font-size: 12px; font-weight: 600; color: #555; margin-bottom: 5px; }
+  .form-group input, .form-group select, .form-group textarea {
+    width: 100%; padding: 8px 10px; border: 1px solid #e0e0e0;
+    border-radius: 6px; font-size: 13px; color: #333;
+    transition: border-color 0.15s; font-family: inherit;
+  }
+  .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+    outline: none; border-color: #3949ab; box-shadow: 0 0 0 2px rgba(57,73,171,0.1);
+  }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+
+  /* ── Summary bar ── */
+  .summary-bar {
+    background: white; margin: 0 24px 16px;
+    border-radius: 10px; padding: 12px 20px;
+    display: flex; gap: 16px; flex-wrap: wrap; align-items: center;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    border-top: 3px solid #1a237e;
+  }
+  .summary-card { display: flex; flex-direction: column; gap: 2px; min-width: 90px; }
+  .summary-label { font-size: 10px; color: #999; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+  .summary-value { font-size: 22px; font-weight: 800; color: #1a237e; }
+  .summary-value.red   { color: #e53935; }
+  .summary-value.green { color: #43a047; }
+  .summary-divider { width: 1px; background: #f0f0f0; align-self: stretch; margin: 0 4px; }
+
+  /* clickable free-member card */
+  .free-member-card {
+    cursor: pointer; border-radius: 8px; padding: 6px 10px;
+    transition: background 0.15s, box-shadow 0.15s;
+    border: 1.5px solid transparent;
+  }
+  .free-member-card:hover {
+    background: #e8f5e9; border-color: #a5d6a7;
+    box-shadow: 0 0 0 2px rgba(102,187,106,0.2);
+  }
+  .free-member-card .hint {
+    font-size: 9px; color: #aaa; margin-top: 2px;
+  }
+
+  /* toast */
+  .toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(8px);
+    background: #323232; color: white; padding: 10px 20px;
+    border-radius: 8px; font-size: 13px; z-index: 2000;
+    opacity: 0; transition: all 0.3s; pointer-events: none;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  .badge {
+    display: inline-block; padding: 1px 6px; border-radius: 10px;
+    font-size: 10px; font-weight: 700;
+  }
+  .badge-blue { background: #e8eaf6; color: #3949ab; }
+  .badge-red  { background: #ffebee; color: #c62828; }
+
+  /* ── Roulette ── */
+  .roulette-modal { width: 420px !important; }
+  .rr-info { font-size: 12px; color: #888; margin: -10px 0 14px; }
+
+  .rr-queue-section { margin-bottom: 14px; }
+  .rr-queue-label { font-size: 10px; font-weight: 700; color: #999; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 7px; }
+  .rr-queue { display: flex; gap: 6px; flex-wrap: wrap; }
+  .rr-item {
+    padding: 4px 11px; border-radius: 16px; font-size: 12px; font-weight: 600;
+    background: #f5f5f5; color: #777; border: 1.5px solid #e8e8e8;
+    transition: all 0.2s;
+  }
+  .rr-item.next   { background: #e8f5e9; color: #2e7d32; border-color: #a5d6a7; }
+  .rr-item.avail  { background: #f0f4ff; color: #1a237e; border-color: #c5cae9; }
+  .rr-item.unavail { background: #fafafa; color: #c0c4d0; border-color: #eeeeee;
+                     text-decoration: line-through; font-size: 11px; }
+  .rr-next-badge {
+    font-size: 8px; background: #43a047; color: white;
+    border-radius: 6px; padding: 1px 5px; margin-right: 3px;
+    font-weight: 700; vertical-align: middle;
+  }
+  .rr-conflict-hint { font-size: 8px; color: #ccc; display: block; text-decoration: none; }
+  .rr-rule-note {
+    text-align: center; font-size: 11px; color: #7986cb;
+    background: #f3f4ff; border-radius: 8px; padding: 5px 10px;
+    margin-bottom: 8px; border: 1px dashed #c5cae9;
+  }
+  /* 배포 시간 선택 행 */
+  .dep-time-row {
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    background: #f7f8fd; border-radius: 10px; padding: 9px 12px; margin-bottom: 10px;
+    border: 1px solid #e8eaf6;
+  }
+  .dep-time-label { font-size: 11px; font-weight: 700; color: #666; flex-shrink: 0; }
+  .dep-date-val   { font-size: 12px; font-weight: 800; color: #1a237e; flex-shrink: 0; }
+  .dep-time-row select {
+    padding: 4px 7px; font-size: 12px; border: 1px solid #dde1f5;
+    border-radius: 7px; color: #333; background: white; cursor: pointer;
+  }
+  /* 투입 충돌 경고 */
+  .conflict-warning {
+    background: #fff8e1; border: 1px solid #ffcc80; border-radius: 8px;
+    padding: 9px 12px; font-size: 11px; color: #e65100; margin-top: 8px;
+    display: none; line-height: 1.5;
+  }
+  .conflict-warning.show { display: block; }
+
+  .wheel-wrap { display: flex; flex-direction: column; align-items: center; margin: 6px 0 10px; }
+  .wheel-pointer { font-size: 26px; color: #e53935; margin-bottom: -10px; z-index: 1;
+    filter: drop-shadow(0 2px 3px rgba(0,0,0,0.25)); }
+  #wheelCanvas { border-radius: 50%; box-shadow: 0 4px 20px rgba(0,0,0,0.15); cursor: pointer; display: block; }
+
+  .result-banner {
+    text-align: center; padding: 0; border-radius: 10px;
+    font-size: 15px; font-weight: 700; overflow: hidden;
+    max-height: 0; transition: max-height 0.3s ease, padding 0.3s;
+  }
+  .result-banner.show {
+    max-height: 80px; padding: 12px 10px;
+    background: linear-gradient(135deg, #e8f5e9, #f1f8e9);
+    border: 2px solid #a5d6a7; color: #2e7d32;
+    animation: resultPop 0.35s ease;
+  }
+  @keyframes resultPop {
+    0%   { transform: scale(0.85); opacity: 0; }
+    60%  { transform: scale(1.04); }
+    100% { transform: scale(1);    opacity: 1; }
+  }
+
+  .assign-deploy-btn {
+    width: 100%; padding: 10px; font-size: 13px; font-weight: 700;
+    background: #e53935; color: white; border: none; border-radius: 8px;
+    cursor: pointer; margin-top: 7px; display: none; transition: all 0.15s;
+  }
+  .assign-deploy-btn:hover { background: #c62828; }
+  .assign-deploy-btn.show { display: block; animation: resultPop 0.3s ease; }
+
+  .spin-big-btn {
+    flex: 1; padding: 10px 18px; font-size: 14px; font-weight: 800;
+    background: linear-gradient(135deg, #1a237e, #3949ab);
+    color: white; border: none; border-radius: 8px; cursor: pointer;
+    box-shadow: 0 4px 12px rgba(57,73,171,0.3); transition: all 0.15s;
+  }
+  .spin-big-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(57,73,171,0.35); }
+  .spin-big-btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
+
+  .rr-reset-btn {
+    padding: 10px 14px; font-size: 12px; font-weight: 600;
+    background: #f5f5f5; color: #777; border: none; border-radius: 8px;
+    cursor: pointer; transition: all 0.15s;
+  }
+  .rr-reset-btn:hover { background: #e8e8e8; color: #333; }
+
+  /* ── History Tab ── */
+  .roulette-tabs { display: flex; gap: 0; margin-bottom: 14px; border-radius: 8px; overflow: hidden; border: 1px solid #e0e0e0; }
+  .roulette-tab {
+    flex: 1; padding: 8px; font-size: 13px; font-weight: 600;
+    background: #f9f9f9; color: #888; border: none; cursor: pointer;
+    transition: all 0.15s;
+  }
+  .roulette-tab.active { background: #1a237e; color: white; }
+  .roulette-tab:first-child { border-right: 1px solid #e0e0e0; }
+
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  .history-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .history-table th {
+    background: #f5f5f5; padding: 7px 8px; text-align: left;
+    font-size: 10px; font-weight: 700; color: #888; text-transform: uppercase;
+    letter-spacing: 0.5px; border-bottom: 2px solid #e0e0e0;
+  }
+  .history-table td { padding: 8px; border-bottom: 1px solid #f5f5f5; color: #333; }
+  .history-table tr:last-child td { border-bottom: none; }
+  .history-table tr:hover td { background: #fafafa; }
+  .history-winner { font-weight: 700; color: #1a237e; }
+  .history-empty { text-align: center; padding: 24px; color: #bbb; font-size: 13px; }
+  .history-scroll { max-height: 260px; overflow-y: auto; border: 1px solid #f0f0f0; border-radius: 6px; }
+
+  /* ════════════════════════════════════════════════════
+     모바일 반응형
+     ════════════════════════════════════════════════════ */
+  @media (max-width: 900px) {
+    /* 헤더 */
+    .header { padding: 10px 14px; flex-wrap: wrap; gap: 8px; }
+    .header-left h1 { font-size: 15px; }
+    .header-left p  { font-size: 11px; }
+    .header-right   { gap: 6px; flex-wrap: wrap; }
+    .btn { padding: 6px 10px; font-size: 12px; }
+
+    /* 주간 네비 */
+    .week-nav { padding: 8px 12px; gap: 6px; flex-wrap: wrap; }
+    .month-label-btn { font-size: 13px; min-width: 150px; padding: 4px 10px; }
+    .day-tabs { gap: 3px; overflow-x: auto; padding-bottom: 2px; }
+    .day-tab  { padding: 4px 9px; font-size: 11px; white-space: nowrap; }
+
+    /* 범례 */
+    .legend { padding: 6px 14px; gap: 10px; flex-wrap: wrap; }
+    .legend-item { font-size: 11px; }
+
+    /* 요약 바 */
+    .summary-bar  { margin: 0 12px 12px; padding: 10px 14px; gap: 10px; }
+    .summary-card { min-width: 70px; }
+    .summary-value { font-size: 18px; }
+    .summary-label { font-size: 9px; }
+
+    /* 그리드 영역: 가로 스크롤 허용 */
+    .main { padding: 8px 12px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .grid-container { min-width: 680px; border-radius: 8px; }
+
+    /* 멤버 헤더 */
+    .member-col-header { padding: 8px 6px; }
+    .member-name  { font-size: 12px; }
+    .member-team, .member-dept { font-size: 9px; }
+
+    /* 시간 컬럼 */
+    .grid-header { grid-template-columns: 54px repeat(5, 1fr); }
+    .allday-row  { grid-template-columns: 54px repeat(5, 1fr); }
+    .timed-slot-row { grid-template-columns: 54px repeat(5, 1fr); }
+    .events-overlay { left: 54px; }
+    .grid-header-time { padding: 8px 4px; }
+    .time-label { font-size: 10px; padding: 0 4px; padding-top: 4px; }
+    .allday-label { font-size: 9px; }
+
+    /* 슬롯 높이 축소 */
+    .timed-slot-row          { height: 38px; }
+    .timed-slot-row.half-hour { height: 32px; }
+
+    /* 이벤트 블록 */
+    .timed-event-block { font-size: 10px; padding: 2px 4px; left: 2px; right: 2px; }
+    .timed-event-block .event-time { font-size: 8px; }
+    .allday-event { font-size: 9px; padding: 2px 5px; }
+
+    /* 모달 */
+    .modal { width: calc(100vw - 32px); max-width: 400px; padding: 18px; }
+    .roulette-modal { width: calc(100vw - 32px) !important; max-width: 420px !important; }
+    #wheelCanvas { width: 240px !important; height: 240px !important; }
+  }
+
+  @media (max-width: 600px) {
+    .header-left h1 { font-size: 13px; }
+    /* 버튼 일부 숨김 (라운드로빈, 빈시간은 유지) */
+    .sync-status { display: none; }
+    .grid-container { min-width: 580px; }
+
+    /* 시간 컬럼 더 축소 */
+    .grid-header { grid-template-columns: 44px repeat(5, 1fr); }
+    .allday-row  { grid-template-columns: 44px repeat(5, 1fr); }
+    .timed-slot-row { grid-template-columns: 44px repeat(5, 1fr); }
+    .events-overlay { left: 44px; }
+    .time-label { font-size: 9px; padding: 0 2px; padding-top: 3px; }
+
+    .timed-slot-row          { height: 34px; }
+    .timed-slot-row.half-hour { height: 28px; }
+
+    .member-col-header { padding: 6px 4px; }
+    .member-name  { font-size: 11px; }
+    .member-team, .member-dept { display: none; } /* 공간 부족 시 팀명 숨김 */
+
+    .summary-bar { margin: 0 8px 10px; gap: 8px; }
+    .summary-value { font-size: 16px; }
+    .summary-divider { display: none; }
+  }
+
+  /* ── CRM 연동 섹션 ─────────────────────────────────────────────────────── */
+  .crm-section {
+    margin-top: 12px; border-top: 1px solid #e8eaf6;
+    padding-top: 12px; display: none;
+  }
+  .crm-section.visible { display: block; }
+  .crm-header {
+    font-size: 13px; font-weight: 700; color: #1a237e;
+    margin-bottom: 10px; display: flex; align-items: center; gap: 6px;
+  }
+  .crm-input-row {
+    display: flex; gap: 6px; margin-bottom: 8px;
+  }
+  .crm-input-row input {
+    flex: 1; padding: 7px 10px; border: 1px solid #ddd; border-radius: 6px;
+    font-size: 13px; font-family: inherit;
+  }
+  .crm-input-row input:focus { outline: none; border-color: #3949ab; }
+  .crm-ticket-card {
+    background: #f8f9ff; border: 1px solid #c5cae9; border-radius: 10px;
+    padding: 12px 14px; margin-bottom: 8px; display: none;
+  }
+  .crm-ticket-card.visible { display: block; animation: calFadeIn 0.18s ease; }
+  .crm-ticket-title {
+    font-size: 14px; font-weight: 600; color: #1a237e; margin-bottom: 6px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .crm-ticket-meta {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 12px; color: #666; margin-bottom: 10px;
+  }
+  .crm-ticket-meta strong { color: #333; }
+  .crm-ticket-link {
+    font-size: 12px; color: #3949ab; text-decoration: none; font-weight: 600;
+  }
+  .crm-ticket-link:hover { text-decoration: underline; }
+  .crm-assign-btn {
+    width: 100%; padding: 9px; border: none; border-radius: 8px;
+    background: linear-gradient(135deg, #1a237e, #3949ab);
+    color: white; font-size: 13px; font-weight: 700; cursor: pointer;
+    transition: all 0.15s;
+  }
+  .crm-assign-btn:hover { opacity: 0.88; transform: translateY(-1px); }
+  .crm-assign-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+  .crm-status {
+    font-size: 12px; color: #888; min-height: 18px; text-align: center;
+    margin-top: 4px;
+  }
+  .crm-status.error { color: #e53935; }
+  .crm-status.success { color: #43a047; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <div class="header-left">
+    <h1>🚀 본부 멤버 배포지원 투입관리 대시보드</h1>
+    <p>Partner / Appliance / Security 365 Platform부 · 5명</p>
+  </div>
+  <div class="header-right">
+    <button class="btn btn-white" onclick="openRoulette()">🎲 라운드로빈 돌림판</button>
+    <button class="btn btn-white" id="toggleFreeBtn" onclick="toggleFreeSlots()">🟢 빈 시간 보기</button>
+    <button class="btn btn-outlook" id="syncBtn" onclick="syncOutlook()">☁️ 아웃룩 동기화</button>
+    <button class="btn btn-deploy" onclick="openDeployModal()">🚀 배포지원 투입</button>
+  </div>
+</div>
+
+<!-- Nav wrapper (relative for calendar popup) -->
+<div class="nav-wrapper">
+  <div class="week-nav">
+    <!-- week prev/next -->
+    <button class="week-nav-btn" onclick="changeWeek(-1)" title="이전 주">‹</button>
+    <!-- month calendar button -->
+    <button class="month-label-btn" id="monthLabelBtn" onclick="toggleCalendar()">
+      <span id="weekLabel"></span>
+      <span class="cal-arrow">▾</span>
+    </button>
+    <button class="week-nav-btn" onclick="changeWeek(1)" title="다음 주">›</button>
+    <button class="btn btn-secondary" style="font-size:12px;padding:5px 10px;" onclick="goToday()">오늘</button>
+    <!-- day tabs -->
+    <div class="day-tabs" id="dayTabs"></div>
+  </div>
+
+  <!-- Calendar Popup -->
+  <div class="cal-popup" id="calPopup">
+    <div class="cal-header">
+      <button class="cal-nav" onclick="changeCalMonth(-1)">‹</button>
+      <span class="cal-header-label" id="calMonthLabel"></span>
+      <button class="cal-nav" onclick="changeCalMonth(1)">›</button>
+    </div>
+    <div class="cal-grid" id="calGrid"></div>
+    <button class="cal-today-btn" onclick="calGoToday()">오늘로 이동</button>
+  </div>
+</div>
+
+<!-- Legend -->
+<div class="legend">
+  <span style="font-size:12px;font-weight:700;color:#555;">범례</span>
+  <div class="legend-item"><div class="legend-dot dot-meeting"></div>회의/미팅</div>
+  <div class="legend-item"><div class="legend-dot dot-deploy"></div>배포지원</div>
+  <div class="legend-item"><div class="legend-dot dot-out"></div>외근/휴가</div>
+  <div class="legend-item"><div class="legend-dot dot-other"></div>기타</div>
+  <div class="legend-item"><div class="legend-dot dot-free"></div>빈 시간</div>
+  <span style="margin-left:auto;font-size:11px;color:#aaa;">빈 셀 클릭 → 일정 추가 · 일정 클릭 → 수정/삭제</span>
+</div>
+
+<!-- Summary bar -->
+<div style="height:16px"></div>
+<div class="summary-bar" id="summaryBar"></div>
+
+<!-- Main Grid -->
+<div class="main">
+  <div class="grid-container" id="gridContainer"></div>
+</div>
+
+<!-- Add/Edit Modal -->
+<div class="modal-overlay" id="eventModal">
+  <div class="modal">
+    <h3 id="modalTitle">일정 추가</h3>
+    <div class="form-group">
+      <label>담당자</label>
+      <select id="fMember"></select>
+    </div>
+    <div class="form-group">
+      <label>일정 제목</label>
+      <input type="text" id="fTitle" placeholder="예: 팀 회의, 고객 미팅..." />
+    </div>
+    <div class="form-group">
+      <label>유형</label>
+      <select id="fType">
+        <option value="meeting">🟣 회의/미팅</option>
+        <option value="deploy">🔴 배포지원</option>
+        <option value="out">⚫ 외근/휴가</option>
+        <option value="other">🟤 기타</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>시작 시간</label>
+        <select id="fStart"></select>
+      </div>
+      <div class="form-group">
+        <label>종료 시간</label>
+        <select id="fEnd"></select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>메모 (선택)</label>
+      <textarea id="fNote" rows="2" placeholder="참석자, 장소 등..."></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-danger" id="deleteBtn" onclick="deleteEvent()" style="margin-right:auto;display:none;">삭제</button>
+      <button class="btn btn-secondary" onclick="closeModal()">취소</button>
+      <button class="btn btn-primary" onclick="saveEvent()">저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- Deploy Modal -->
+<div class="modal-overlay" id="deployModal">
+  <div class="modal">
+    <h3>🚀 배포지원 일정 투입</h3>
+    <p style="font-size:11px;color:#888;margin:-12px 0 14px;">
+      돌림판으로 선정된 멤버를 투입하거나 직접 담당자를 지정합니다.
+    </p>
+    <div class="form-group">
+      <label>투입 대상 멤버</label>
+      <select id="dMember" onchange="checkDeployConflict()">
+        <option value="">-- 멤버 선택 --</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>배포지원 내용 (고객사·프로젝트명)</label>
+      <input type="text" id="dTitle" placeholder="예: A사 클라우드 배포, B제품 현장 설치..." />
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>배포 날짜</label>
+        <input type="date" id="dDate" onchange="checkDeployConflict()" />
+      </div>
+      <div class="form-group">
+        <label>시작 시간</label>
+        <select id="dStart" onchange="checkDeployConflict()"></select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>종료 시간</label>
+      <select id="dEnd" onchange="checkDeployConflict()"></select>
+    </div>
+    <!-- 일정 충돌 경고 -->
+    <div class="conflict-warning" id="deployConflict">
+      ⚠️ <span id="deployConflictMsg"></span>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeDeployModal()">취소</button>
+      <button class="btn btn-deploy" onclick="saveDeployEvent()">투입 확정</button>
+    </div>
+  </div>
+</div>
+
+<!-- Roulette Modal -->
+<div class="modal-overlay" id="rouletteModal">
+  <div class="modal roulette-modal">
+    <h3>🎲 배포지원 돌림판</h3>
+
+    <!-- 탭 -->
+    <div class="roulette-tabs">
+      <button class="roulette-tab active" id="tabWheel" onclick="switchTab('wheel')">🎲 돌림판</button>
+      <button class="roulette-tab" id="tabHistory" onclick="switchTab('history')">📋 스핀 이력</button>
+    </div>
+
+    <!-- 돌림판 탭 -->
+    <div class="tab-panel active" id="panelWheel">
+      <!-- 배포 예정 시간 설정 -->
+      <div class="dep-time-row">
+        <span class="dep-time-label">📅 배포 일시</span>
+        <span class="dep-date-val" id="depDateVal"></span>
+        <select id="rDepStart" onchange="refreshRoulette()"></select>
+        <span style="color:#aaa;font-size:12px;">~</span>
+        <select id="rDepEnd" onchange="refreshRoulette()"></select>
+      </div>
+      <p class="rr-info" id="rrInfo"></p>
+      <div class="rr-queue-section">
+        <div class="rr-queue-label">라운드로빈 순서 (← 다음 차례)</div>
+        <div class="rr-queue" id="rrQueue"></div>
+      </div>
+      <div class="rr-rule-note">
+        🔄 최근에 뽑힌 사람은 자동으로 <strong>후순위</strong>로 밀립니다
+      </div>
+      <div class="wheel-wrap">
+        <div class="wheel-pointer">▼</div>
+        <canvas id="wheelCanvas" width="300" height="300" onclick="spinWheel()"></canvas>
+      </div>
+      <div class="result-banner" id="resultBanner"></div>
+      <button class="assign-deploy-btn" id="assignDeployBtn" onclick="assignFromWheel()">
+        🚀 이 멤버로 배포지원 일정 투입하기
+      </button>
+
+      <!-- vtiger CRM 연동 -->
+      <div class="crm-section" id="crmSection">
+        <div class="crm-header">🔗 vtiger CRM 티켓 연동</div>
+        <div class="crm-input-row">
+          <input type="text" id="crmTicketId" placeholder="티켓 번호 (예: 12345)" />
+          <button class="btn btn-primary" onclick="lookupCrmTicket()" id="crmLookupBtn">조회</button>
+        </div>
+        <div class="crm-ticket-card" id="crmTicketCard">
+          <div class="crm-ticket-title" id="crmTicketTitle"></div>
+          <div class="crm-ticket-meta">
+            <span>현재 담당자: <strong id="crmCurrentAssignee">—</strong></span>
+            <a class="crm-ticket-link" id="crmTicketLink" href="#" target="_blank">티켓 열기 ↗</a>
+          </div>
+          <button class="crm-assign-btn" id="crmAssignBtn" onclick="updateCrmAssignee()">
+            🎯 <span id="crmWinnerLabel">선정 멤버</span>님으로 담당자 변경
+          </button>
+        </div>
+        <div class="crm-status" id="crmStatus"></div>
+      </div>
+
+      <div class="modal-actions" style="margin-top:14px">
+        <button class="rr-reset-btn" onclick="resetPickHistory()" title="스핀 이력 전체 삭제">🗑 이력 삭제</button>
+        <button class="btn btn-secondary" onclick="closeRoulette()">닫기</button>
+        <button class="spin-big-btn" id="spinBtn" onclick="spinWheel()">🎲 돌리기!</button>
+      </div>
+    </div>
+
+    <!-- 이력 탭 -->
+    <div class="tab-panel" id="panelHistory">
+      <div class="history-scroll">
+        <table class="history-table">
+          <thead>
+            <tr>
+              <th>스핀 일시</th>
+              <th>배포 대상일</th>
+              <th>선정 멤버</th>
+            </tr>
+          </thead>
+          <tbody id="historyBody"></tbody>
+        </table>
+      </div>
+      <div class="modal-actions" style="margin-top:14px">
+        <button class="rr-reset-btn" onclick="resetPickHistory()">🗑 이력 전체 삭제</button>
+        <button class="btn btn-secondary" onclick="closeRoulette()">닫기</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ─── Cloudflare Worker 설정 ──────────────────────────────────────────────────
+// ✏️ Cloudflare Worker 배포 후 아래 URL을 교체하세요
+const WORKER_URL = localStorage.getItem('workerUrl') || '';
+
+// ─── Data ───────────────────────────────────────────────────────────────────
+const MEMBERS = [
+  { id: 1, name: '이송민', team: 'Partner Online Platform팀', dept: 'Partner Platform부' },
+  { id: 2, name: '이하영', team: 'Partner Program팀',         dept: 'Partner Platform부' },
+  { id: 3, name: '강진혁', team: 'Appliance Platform팀',     dept: 'Appliance Platform부' },
+  { id: 4, name: '김선우', team: 'Appliance Platform팀',     dept: 'Appliance Platform부' },
+  { id: 5, name: '김요엘', team: 'Security 365 Platform팀',  dept: 'Security 365 Platform부' },
+  { id: 6, name: '윤이나', team: 'Partner Program팀',        dept: 'Partner Platform부' },
+  { id: 7, name: '이정기', team: 'Appliance Platform팀',      dept: 'Appliance Platform부' },
+  { id: 8, name: '김정환', team: 'Partner Online Platform팀', dept: 'Partner Platform부' },
+];
+
+const HOURS     = ['09:00','09:30','10:00','10:30','11:00','11:30','12:00','12:30',
+                    '13:00','13:30','14:00','14:30','15:00','15:30','16:00','16:30',
+                    '17:00','17:30','18:00','18:30','19:00','19:30','20:00'];
+const DAY_NAMES = ['월','화','수','목','금'];
+const MONTH_KR  = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
+
+let events           = JSON.parse(localStorage.getItem('scheduleEvents') || '[]');
+let currentWeekStart = getMonday(new Date());
+let selectedDay      = new Date();
+let showFree         = false;
+let editingId        = null;
+let addContext       = null;
+let calOpen          = false;
+let calViewMonth     = new Date(); // which month the calendar popup is showing
+
+// ─── Date helpers ─────────────────────────────────────────────────────────
+function getMonday(d) {
+  const dt = new Date(d);
+  const day = dt.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  dt.setDate(dt.getDate() + diff);
+  dt.setHours(0,0,0,0);
+  return dt;
+}
+function fmtDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function weekDays(start) {
+  return Array.from({length:5}, (_,i) => {
+    const d = new Date(start); d.setDate(start.getDate() + i); return d;
+  });
+}
+function isToday(d) { return fmtDate(d) === fmtDate(new Date()); }
+function selectedDate() { return fmtDate(selectedDay); }
+function sameWeek(d1, d2) {
+  return fmtDate(getMonday(d1)) === fmtDate(getMonday(d2));
+}
+
+// ─── Time helpers ────────────────────────────────────────────────────────
+function timeToMinutes(t) {
+  const [h,m] = t.split(':').map(Number); return h*60+m;
+}
+function eventsOverlap(s1,e1,s2,e2) {
+  return timeToMinutes(s1)<timeToMinutes(e2) && timeToMinutes(s2)<timeToMinutes(e1);
+}
+function slotIsFree(memberId, date, slotTime) {
+  const slotEnd = addMinutes(slotTime, 30);
+  return !events.some(e =>
+    e.memberId===memberId && e.date===date &&
+    eventsOverlap(slotTime, slotEnd, e.startTime, e.endTime)
+  );
+}
+function addMinutes(time, mins) {
+  const total = timeToMinutes(time) + mins;
+  return `${String(Math.floor(total/60)).padStart(2,'0')}:${String(total%60).padStart(2,'0')}`;
+}
+
+// ─── Main Render ──────────────────────────────────────────────────────────
+function render() {
+  renderWeekLabel();
+  renderDayTabs();
+  renderGrid();
+  renderSummary();
+}
+
+function renderWeekLabel() {
+  const days = weekDays(currentWeekStart);
+  const s = days[0], e = days[4];
+  const sameMonth = s.getMonth() === e.getMonth();
+  const label = sameMonth
+    ? `${s.getFullYear()}년 ${s.getMonth()+1}월 ${s.getDate()}일 – ${e.getDate()}일`
+    : `${s.getMonth()+1}월 ${s.getDate()}일 – ${e.getMonth()+1}월 ${e.getDate()}일`;
+  document.getElementById('weekLabel').textContent = label;
+}
+
+function renderDayTabs() {
+  const days = weekDays(currentWeekStart);
+  const container = document.getElementById('dayTabs');
+  container.innerHTML = '';
+  days.forEach((d, i) => {
+    const btn = document.createElement('button');
+    const isActive = fmtDate(d) === fmtDate(selectedDay);
+    const isTdy    = isToday(d);
+    btn.className = `day-tab${isActive?' active':''}${isTdy&&!isActive?' today':''}`;
+    btn.innerHTML = `<strong>${DAY_NAMES[i]}</strong> ${d.getDate()}`;
+    btn.onclick = () => { selectedDay = d; render(); };
+    container.appendChild(btn);
+  });
+}
+
+function renderGrid() {
+  const container = document.getElementById('gridContainer');
+  const dateStr   = selectedDate();
+
+  // 30분 슬롯 높이: 뷰포트 폭에 따라 CSS와 동기화
+  const vw = window.innerWidth;
+  const ROW_FULL = vw <= 600 ? 34 : vw <= 900 ? 38 : 44;
+  const ROW_HALF = vw <= 600 ? 28 : vw <= 900 ? 32 : 38;
+  const FIRST_MIN = 9 * 60; // 09:00 = 540분
+
+  function timeToMin(t) {
+    if (!t) return FIRST_MIN;
+    const [h, m] = t.split(':').map(Number);
+    return h * 60 + (m || 0);
+  }
+
+  // 슬롯 인덱스(0-based)의 상단 누적 픽셀 계산
+  function slotTopPx(idx) {
+    let px = 0;
+    for (let k = 0; k < idx; k++) {
+      px += HOURS[k].endsWith(':30') ? ROW_HALF : ROW_FULL;
+    }
+    return px;
+  }
+
+  // 시각(HH:MM) → 슬롯 상단에서의 픽셀 위치
+  function timeToPx(timeStr) {
+    const min = timeToMin(timeStr);
+    if (min <= FIRST_MIN) return 0;
+    const totalMin = HOURS.reduce((acc, h, i) => {
+      if (i < HOURS.length - 1) return acc; return acc;
+    }, 0);
+    // 어느 슬롯에 속하는지 찾아 보정
+    let px = 0;
+    for (let i = 0; i < HOURS.length - 1; i++) {
+      const slotMin = timeToMin(HOURS[i]);
+      const nextMin = timeToMin(HOURS[i + 1]);
+      const h = HOURS[i].endsWith(':30') ? ROW_HALF : ROW_FULL;
+      if (min <= slotMin) break;
+      if (min < nextMin) {
+        px += (min - slotMin) / (nextMin - slotMin) * h;
+        return px;
+      }
+      px += h;
+    }
+    return px;
+  }
+
+  const TYPE_CLS = {
+    meeting: 'event-meeting', deploy: 'event-deploy',
+    out: 'event-out', other: 'event-other'
+  };
+
+  // ── 1. 컬럼 헤더 ─────────────────────────────────────────────────────────
+  let html = `<div class="grid-header"><div class="grid-header-time"></div>`;
+  MEMBERS.forEach(m => {
+    const deployCount = events.filter(e => e.memberId===m.id && e.date===dateStr && e.type==='deploy').length;
+    html += `<div class="member-col-header" data-member-header="${m.id}">
+      <div class="member-name" id="mname-${m.id}">${m.name}${deployCount>0?` <span class="badge badge-red">배포${deployCount}</span>`:''}</div>
+      <div class="member-team">${m.team}</div>
+      <div class="member-dept">${m.dept}</div>
+    </div>`;
+  });
+  html += '</div>';
+
+  // ── 2. 하루종일 행 ────────────────────────────────────────────────────────
+  html += `<div class="allday-row">
+    <div class="allday-label">하루<br>종일</div>`;
+  MEMBERS.forEach(m => {
+    const alldayEvs = events.filter(e => e.memberId===m.id && e.date===dateStr && e.isAllDay);
+    html += `<div class="allday-cell">`;
+    alldayEvs.forEach(ev => {
+      const cls = TYPE_CLS[ev.type] || 'event-other';
+      const isOutlook = !!ev.fromOutlook;
+      html += `<div class="allday-event ${cls}${isOutlook?' from-outlook':''}"
+        onclick="${isOutlook ? 'void(0)' : `editEvent(event,'${ev.id}')`}"
+        title="${ev.title}${ev.note?'\n'+ev.note:''}${isOutlook?'\n[아웃룩 연동]':''}">
+        ${ev.title}${isOutlook?'<span class="outlook-badge">OL</span>':''}
+      </div>`;
+    });
+    html += `</div>`;
+  });
+  html += `</div>`;
+
+  // ── 3. 시간 그리드 (배경) + 이벤트 오버레이 ──────────────────────────────
+  html += `<div class="grid-body">`;
+
+  // 배경 슬롯 행
+  for (let i = 0; i < HOURS.length - 1; i++) {
+    const slotStart = HOURS[i];
+    const isHalf    = slotStart.endsWith(':30');
+    html += `<div class="timed-slot-row${isHalf?' half-hour':''}">`;
+    html += `<div class="time-label${isHalf?' half':''}">${isHalf?'':slotStart}</div>`;
+    MEMBERS.forEach(m => {
+      const isFree = slotIsFree(m.id, dateStr, slotStart);
+      html += `<div class="timed-slot-col" onclick="cellClick(event,${m.id},'${dateStr}','${slotStart}')">`;
+      if (isFree) html += `<div class="free-indicator">빈 시간</div>`;
+      html += `</div>`;
+    });
+    html += `</div>`;
+  }
+
+  // 이벤트 오버레이 (절대 위치)
+  const GRID_END_MIN = 20 * 60; // 20:00 = 1200분
+  html += `<div class="events-overlay">`;
+  MEMBERS.forEach(m => {
+    const timedEvs = events.filter(e =>
+      e.memberId===m.id && e.date===dateStr && !e.isAllDay
+    );
+    html += `<div class="member-events-col">`;
+    timedEvs.forEach(ev => {
+      const evStartMin = timeToMin(ev.startTime || '09:00');
+      const evEndMin   = timeToMin(ev.endTime   || '09:30');
+      // 그리드 범위(09:00~20:00) 완전히 벗어나면 스킵
+      if (evEndMin <= FIRST_MIN || evStartMin >= GRID_END_MIN) return;
+
+      const cls       = TYPE_CLS[ev.type] || 'event-other';
+      const isOutlook = !!ev.fromOutlook;
+
+      // 그리드 경계에 맞게 클리핑
+      const clampedStartMin = Math.max(evStartMin, FIRST_MIN);
+      const clampedEndMin   = Math.min(evEndMin,   GRID_END_MIN);
+      const clampedStart    = `${String(Math.floor(clampedStartMin/60)).padStart(2,'0')}:${String(clampedStartMin%60).padStart(2,'0')}`;
+      const clampedEnd      = `${String(Math.floor(clampedEndMin/60)).padStart(2,'0')}:${String(clampedEndMin%60).padStart(2,'0')}`;
+
+      const top    = timeToPx(clampedStart);
+      const height = Math.max(timeToPx(clampedEnd) - top - 2, 22);
+
+      // 실제 시간 표기 (원본 유지)
+      const timeLabel  = `${ev.startTime}–${ev.endTime}`;
+      const clippedTop = evStartMin < FIRST_MIN;   // 09:00 이전 시작
+      const clippedBot = evEndMin   > GRID_END_MIN; // 20:00 이후 종료
+
+      html += `<div class="timed-event-block ${cls}${isOutlook?' from-outlook':''}"
+        style="top:${top}px; height:${height}px;"
+        onclick="${isOutlook ? 'void(0)' : `editEvent(event,'${ev.id}')`}"
+        title="${ev.title}${ev.note?'\n'+ev.note:''}${isOutlook?'\n[아웃룩 연동]':''}">
+        <span class="event-time">${clippedTop?'◀':''} ${timeLabel} ${clippedBot?'▶':''}${isOutlook?'<span class="outlook-badge">OL</span>':''}</span>
+        ${ev.title}
+      </div>`;
+    });
+    html += `</div>`;
+  });
+  html += `</div>`; // events-overlay
+
+  html += `</div>`; // grid-body
+
+  container.innerHTML = html;
+  if (showFree) container.classList.add('show-free');
+  else          container.classList.remove('show-free');
+}
+
+function renderSummary() {
+  const dateStr     = selectedDate();
+  const todayEvents = events.filter(e => e.date===dateStr);
+  const deployCount = todayEvents.filter(e => e.type==='deploy').length;
+  const meetingCount= todayEvents.filter(e => e.type==='meeting').length;
+  const deployMembers = new Set(todayEvents.filter(e=>e.type==='deploy').map(e=>e.memberId)).size;
+  const freeList      = MEMBERS.filter(m => !events.some(e=>e.memberId===m.id && e.date===dateStr));
+  const freeCount     = freeList.length;
+
+  document.getElementById('summaryBar').innerHTML = `
+    <div class="summary-card">
+      <div class="summary-label">전체 일정</div>
+      <div class="summary-value">${todayEvents.length}</div>
+    </div>
+    <div class="summary-divider"></div>
+    <div class="summary-card">
+      <div class="summary-label">회의/미팅</div>
+      <div class="summary-value">${meetingCount}</div>
+    </div>
+    <div class="summary-divider"></div>
+    <div class="summary-card">
+      <div class="summary-label">배포지원</div>
+      <div class="summary-value red">${deployCount}</div>
+    </div>
+    <div class="summary-divider"></div>
+    <div class="summary-card">
+      <div class="summary-label">배포투입 인원</div>
+      <div class="summary-value red">${deployMembers}명</div>
+    </div>
+    <div class="summary-divider"></div>
+    <div class="summary-card free-member-card" onclick="flashFreeMembers()" title="클릭하면 빈 멤버 이름이 반짝입니다">
+      <div class="summary-label">일정 없는 멤버</div>
+      <div class="summary-value green">${freeCount}명</div>
+      <div class="hint">👆 클릭 시 이름 강조</div>
+    </div>
+  `;
+}
+
+// ─── Flash free members ───────────────────────────────────────────────────
+function flashFreeMembers() {
+  const dateStr = selectedDate();
+  const freeIds = MEMBERS
+    .filter(m => !events.some(e => e.memberId===m.id && e.date===dateStr))
+    .map(m => m.id);
+
+  if (freeIds.length === 0) {
+    showToast('오늘 일정이 없는 멤버가 없어요');
+    return;
+  }
+
+  freeIds.forEach(id => {
+    const el = document.getElementById(`mname-${id}`);
+    if (!el) return;
+    el.classList.remove('flashing');
+    void el.offsetWidth; // reflow to restart animation
+    el.classList.add('flashing');
+    setTimeout(() => el.classList.remove('flashing'), 1400);
+  });
+
+  const names = freeIds.map(id => MEMBERS.find(m=>m.id===id)?.name).join(', ');
+  showToast(`일정 없는 멤버: ${names}`);
+}
+
+// ─── Interactions ─────────────────────────────────────────────────────────
+function cellClick(e, memberId, date, startTime) {
+  e.stopPropagation();
+  addContext = { memberId, date, startTime }; editingId = null;
+  openEventModal(memberId, date, startTime);
+}
+function editEvent(e, id) {
+  e.stopPropagation(); editingId = id;
+  const ev = events.find(x => x.id===id); if (!ev) return;
+  openEventModal(ev.memberId, ev.date, ev.startTime, ev);
+}
+function openEventModal(memberId, date, startTime, ev=null) {
+  populateMemberSelect('fMember', memberId);
+  populateTimeSelect('fStart', startTime||'09:00');
+  populateTimeSelect('fEnd', ev ? ev.endTime : addMinutes(startTime||'09:00', 60));
+  document.getElementById('fTitle').value = ev ? ev.title : '';
+  document.getElementById('fType').value  = ev ? ev.type  : 'meeting';
+  document.getElementById('fNote').value  = ev ? (ev.note||'') : '';
+  document.getElementById('modalTitle').textContent = ev ? '일정 수정' : '일정 추가';
+  document.getElementById('deleteBtn').style.display = ev ? 'inline-flex' : 'none';
+  document.getElementById('eventModal').classList.add('open');
+}
+function closeModal() {
+  document.getElementById('eventModal').classList.remove('open');
+  editingId = null; addContext = null;
+}
+function saveEvent() {
+  const title = document.getElementById('fTitle').value.trim();
+  if (!title) { showToast('일정 제목을 입력해 주세요'); return; }
+  const start = document.getElementById('fStart').value;
+  const end   = document.getElementById('fEnd').value;
+  if (timeToMinutes(start) >= timeToMinutes(end)) { showToast('종료 시간은 시작 시간보다 늦어야 합니다'); return; }
+  const ev = {
+    id:        editingId || `ev_${Date.now()}`,
+    memberId:  parseInt(document.getElementById('fMember').value),
+    date:      addContext ? addContext.date : selectedDate(),
+    title, type: document.getElementById('fType').value,
+    startTime: start, endTime: end,
+    note: document.getElementById('fNote').value.trim(),
+  };
+  if (editingId) {
+    const idx = events.findIndex(x => x.id === editingId);
+    if (idx !== -1) {
+      const pageId = events[idx].pageId;
+      if (pageId) ev.pageId = pageId;
+      events[idx] = ev;
+    }
+  } else {
+    events.push(ev);
+  }
+  saveData(); closeModal(); render();
+  showToast(editingId ? '일정이 수정되었습니다' : '일정이 추가되었습니다');
+  // Notion 저장 (비동기)
+  saveEventToNotion(ev).then(saved => {
+    if (saved.pageId && saved.pageId !== ev.pageId) {
+      const idx = events.findIndex(x => x.id === ev.id);
+      if (idx !== -1) { events[idx].pageId = saved.pageId; saveDataLocal(); }
+    }
+  });
+}
+function deleteEvent() {
+  if (!editingId) return;
+  const target = events.find(x => x.id === editingId);
+  events = events.filter(x => x.id !== editingId);
+  saveData(); closeModal(); render(); showToast('일정이 삭제되었습니다');
+  // Notion 삭제 (비동기)
+  if (target?.pageId) deleteEventFromNotion(target.pageId);
+}
+
+// ─── Deploy Modal ─────────────────────────────────────────────────────────
+function openDeployModal() {
+  const sel = document.getElementById('dMember');
+  sel.innerHTML = '<option value="">-- 멤버 선택 --</option>';
+  MEMBERS.forEach(m => sel.innerHTML += `<option value="${m.id}">${m.name} (${m.team})</option>`);
+  populateTimeSelect('dStart','09:00');
+  populateTimeSelect('dEnd','18:00');
+  document.getElementById('dDate').value = selectedDate();
+  document.getElementById('dTitle').value = '';
+  document.getElementById('deployModal').classList.add('open');
+}
+function closeDeployModal() { document.getElementById('deployModal').classList.remove('open'); }
+function saveDeployEvent() {
+  const memberId = parseInt(document.getElementById('dMember').value);
+  const title    = document.getElementById('dTitle').value.trim();
+  const date     = document.getElementById('dDate').value;
+  const start    = document.getElementById('dStart').value;
+  const end      = document.getElementById('dEnd').value;
+  if (!memberId) { showToast('멤버를 선택해 주세요'); return; }
+  if (!title)    { showToast('배포지원 내용을 입력해 주세요'); return; }
+  if (!date)     { showToast('날짜를 선택해 주세요'); return; }
+  if (timeToMinutes(start)>=timeToMinutes(end)) { showToast('종료 시간은 시작 시간보다 늦어야 합니다'); return; }
+  const deployEv = { id:`ev_${Date.now()}`, memberId, date, title, type:'deploy', startTime:start, endTime:end, note:'' };
+  events.push(deployEv);
+  saveData();
+  selectedDay = new Date(date+'T00:00:00');
+  currentWeekStart = getMonday(selectedDay);
+  closeDeployModal(); render();
+  showToast(`${MEMBERS.find(x=>x.id===memberId)?.name} 배포지원 일정이 투입되었습니다 🚀`);
+  // Notion 저장 (비동기)
+  saveEventToNotion(deployEv).then(saved => {
+    if (saved.pageId) {
+      const idx = events.findIndex(x => x.id === deployEv.id);
+      if (idx !== -1) { events[idx].pageId = saved.pageId; saveDataLocal(); }
+    }
+  });
+}
+
+// ─── Calendar Popup ───────────────────────────────────────────────────────
+function toggleCalendar() {
+  calOpen = !calOpen;
+  const popup = document.getElementById('calPopup');
+  const btn   = document.getElementById('monthLabelBtn');
+  if (calOpen) {
+    calViewMonth = new Date(currentWeekStart.getFullYear(), currentWeekStart.getMonth(), 1);
+    renderCalendar();
+    popup.classList.add('open');
+    btn.classList.add('open');
+  } else {
+    popup.classList.remove('open');
+    btn.classList.remove('open');
+  }
+}
+function closeCalendar() {
+  calOpen = false;
+  document.getElementById('calPopup').classList.remove('open');
+  document.getElementById('monthLabelBtn').classList.remove('open');
+}
+function changeCalMonth(dir) {
+  calViewMonth = new Date(calViewMonth.getFullYear(), calViewMonth.getMonth()+dir, 1);
+  renderCalendar();
+}
+function renderCalendar() {
+  const year  = calViewMonth.getFullYear();
+  const month = calViewMonth.getMonth();
+  document.getElementById('calMonthLabel').textContent = `${year}년 ${MONTH_KR[month]}`;
+
+  const firstDay = new Date(year, month, 1);
+  const startDay = new Date(firstDay);
+  startDay.setDate(startDay.getDate() - startDay.getDay()); // go to Sunday
+
+  const todayStr    = fmtDate(new Date());
+  const selectedStr = fmtDate(selectedDay);
+
+  let html = '';
+  ['일','월','화','수','목','금','토'].forEach((d,i) => {
+    html += `<div class="cal-day-hdr${i===0?' sun':i===6?' sat':''}">${d}</div>`;
+  });
+
+  const cur = new Date(startDay);
+  for (let i = 0; i < 42; i++) {
+    const dateStr    = fmtDate(cur);
+    const isOther    = cur.getMonth() !== month;
+    const isTdy      = dateStr === todayStr;
+    const isSel      = dateStr === selectedStr;
+    const inSelWeek  = !isOther && sameWeek(cur, selectedDay);
+    const hasEvt     = !isOther && events.some(e => e.date===dateStr);
+
+    let cls = 'cal-day';
+    if (cur.getDay() === 0) cls += ' sun';
+    if (cur.getDay() === 6) cls += ' sat';
+    if (isOther)   cls += ' other-month';
+    if (isTdy)     cls += ' is-today';
+    if (inSelWeek) cls += ' in-selected-week';
+    if (isSel)     cls += ' is-selected';
+
+    const onclick = isOther ? '' : `onclick="calSelectDay('${dateStr}')"`;
+    html += `<div class="${cls}" ${onclick}>
+      ${cur.getDate()}
+      ${hasEvt ? '<div class="cal-dot"></div>' : ''}
+    </div>`;
+    cur.setDate(cur.getDate()+1);
+  }
+  document.getElementById('calGrid').innerHTML = html;
+}
+function calSelectDay(dateStr) {
+  selectedDay      = new Date(dateStr+'T00:00:00');
+  currentWeekStart = getMonday(selectedDay);
+  closeCalendar(); render();
+}
+function calGoToday() {
+  const today = new Date();
+  selectedDay      = today;
+  currentWeekStart = getMonday(today);
+  calViewMonth     = new Date(today.getFullYear(), today.getMonth(), 1);
+  closeCalendar(); render();
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────
+function populateMemberSelect(id, selectedId) {
+  const sel = document.getElementById(id); sel.innerHTML='';
+  MEMBERS.forEach(m => {
+    const opt = document.createElement('option');
+    opt.value=m.id; opt.textContent=`${m.name} (${m.team})`;
+    if (m.id===selectedId) opt.selected=true;
+    sel.appendChild(opt);
+  });
+}
+function populateTimeSelect(id, selectedVal) {
+  const sel = document.getElementById(id); sel.innerHTML='';
+  HOURS.forEach(h => {
+    const opt = document.createElement('option');
+    opt.value=h; opt.textContent=h;
+    if (h===selectedVal) opt.selected=true;
+    sel.appendChild(opt);
+  });
+}
+function changeWeek(dir) {
+  currentWeekStart = new Date(currentWeekStart);
+  currentWeekStart.setDate(currentWeekStart.getDate()+dir*7);
+  selectedDay = new Date(currentWeekStart);
+  closeCalendar(); render();
+}
+function goToday() {
+  const today = new Date();
+  currentWeekStart = getMonday(today); selectedDay = today;
+  closeCalendar(); render();
+}
+function toggleFreeSlots() {
+  showFree = !showFree;
+  document.getElementById('toggleFreeBtn').textContent = showFree ? '🟢 빈 시간 숨기기' : '🟢 빈 시간 보기';
+  render();
+}
+function saveDataLocal() { localStorage.setItem('scheduleEvents', JSON.stringify(events)); }
+function saveData() { saveDataLocal(); }  // 하위호환 alias
+
+// ── Notion에서 모든 이벤트 로드 (앱 시작 + 수동 동기화 후) ──────────────
+async function loadEventsFromNotion() {
+  if (!WORKER_URL) return;
+  try {
+    const res = await fetch(WORKER_URL, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Action': 'load-events' },
+      body:    '{}',
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.ok || !Array.isArray(data.events)) return;
+    events = data.events;
+    saveDataLocal();
+    render();
+  } catch(_) {}
+}
+
+// ── Notion에 단일 이벤트 저장 (신규 or 수정) ────────────────────────────
+async function saveEventToNotion(ev) {
+  if (!WORKER_URL) return ev;
+  try {
+    const res = await fetch(WORKER_URL, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Action': 'save-event' },
+      body:    JSON.stringify(ev),
+    });
+    if (!res.ok) return ev;
+    const data = await res.json();
+    if (data.ok && data.pageId) return {...ev, pageId: data.pageId};
+  } catch(_) {}
+  return ev;
+}
+
+// ── Notion에서 이벤트 삭제 ────────────────────────────────────────────────
+async function deleteEventFromNotion(pageId) {
+  if (!WORKER_URL || !pageId) return;
+  try {
+    await fetch(WORKER_URL, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Action': 'delete-event' },
+      body:    JSON.stringify({ pageId }),
+    });
+  } catch(_) {}
+}
+
+// ─── Outlook 동기화 ───────────────────────────────────────────────────────
+let lastSyncTime = localStorage.getItem('lastSyncTime') || null;
+
+async function syncOutlook() {
+  if (!WORKER_URL) {
+    // Worker URL 미설정 시 입력 팝업
+    const url = prompt(
+      '☁️ Cloudflare Worker URL을 입력하세요\n' +
+      '(예: https://my-worker.your-id.workers.dev)\n\n' +
+      '나중에 바꾸려면 이 버튼을 다시 클릭하세요.'
+    );
+    if (!url) return;
+    localStorage.setItem('workerUrl', url.trim());
+    location.reload(); // 재로드해서 WORKER_URL 반영
+    return;
+  }
+
+  const btn = document.getElementById('syncBtn');
+  btn.classList.add('syncing');
+  btn.textContent = '☁️ 동기화 중...';
+
+  try {
+    // 현재 주 전체를 동기화 (이전 주 ~ 다음 4주)
+    const start = new Date(currentWeekStart);
+    start.setDate(start.getDate() - 7);
+    const end = new Date(currentWeekStart);
+    end.setDate(end.getDate() + 28);
+
+    // 1) 서버 측에서 아웃룩 → Notion 동기화 실행
+    const syncRes = await fetch(WORKER_URL, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Action': 'run-sync' },
+      body:    '{}',
+    });
+    if (!syncRes.ok) throw new Error(`Worker 오류 ${syncRes.status}: ${await syncRes.text()}`);
+
+    // 2) Notion에서 갱신된 이벤트 전체 로드
+    const loadRes = await fetch(WORKER_URL, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Action': 'load-events' },
+      body:    '{}',
+    });
+    if (!loadRes.ok) throw new Error(`이벤트 로드 실패 ${loadRes.status}`);
+    const loadData = await loadRes.json();
+    if (loadData.ok && Array.isArray(loadData.events)) {
+      events = loadData.events;
+      saveDataLocal();
+    }
+
+    lastSyncTime = new Date().toLocaleString('ko-KR');
+    localStorage.setItem('lastSyncTime', lastSyncTime);
+
+    render();
+    showToast(`☁️ 아웃룩 동기화 완료 — ${loadData.events?.length ?? 0}개 일정`);
+
+  } catch (err) {
+    console.error(err);
+    showToast(`동기화 실패: ${err.message}`);
+  } finally {
+    btn.classList.remove('syncing');
+    btn.textContent = '☁️ 아웃룩 동기화';
+  }
+}
+
+// Worker URL 변경 (길게 클릭 시)
+document.addEventListener('DOMContentLoaded', () => {
+  const btn = document.getElementById('syncBtn');
+  if (btn && lastSyncTime) {
+    btn.title = `마지막 동기화: ${lastSyncTime}`;
+  }
+  // Notion에서 최신 이벤트 로드 (Worker 설정된 경우)
+  if (WORKER_URL) {
+    loadEventsFromNotion();
+  }
+});
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+// Close calendar on outside click
+document.addEventListener('click', e => {
+  if (calOpen &&
+      !document.getElementById('calPopup').contains(e.target) &&
+      !document.getElementById('monthLabelBtn').contains(e.target)) {
+    closeCalendar();
+  }
+});
+document.getElementById('eventModal').addEventListener('click', function(e) { if(e.target===this)closeModal(); });
+document.getElementById('deployModal').addEventListener('click', function(e) { if(e.target===this)closeDeployModal(); });
+document.getElementById('rouletteModal').addEventListener('click', function(e) { if(e.target===this)closeRoulette(); });
+
+// ─── Roulette (Round-Robin) ───────────────────────────────────────────────
+const WHEEL_COLORS = ['#5c6bc0','#e53935','#43a047','#fb8c00','#8e24aa'];
+let pickHistory  = JSON.parse(localStorage.getItem('pickHistory') || '[]');
+let spinning     = false;
+let wheelRot     = 0;
+let wheelSlices  = [];
+let lastWinner   = null;
+
+// ── 라운드로빈 순서 관리 ──────────────────────────────────────────────────
+// 앞쪽 = 다음 차례(가장 오래 안 뽑힌), 뒤쪽 = 최근 선정
+// Notion 스핀 이력 기반으로 로드, 없으면 localStorage 폴백
+let rrOrder = (() => {
+  const s = JSON.parse(localStorage.getItem('rrOrder') || 'null');
+  return (s && s.length === MEMBERS.length) ? s : MEMBERS.map(m => m.id);
+})();
+function saveRrOrder() { localStorage.setItem('rrOrder', JSON.stringify(rrOrder)); }
+function advanceRrOrder(winnerId) {
+  rrOrder = rrOrder.filter(id => id !== winnerId);
+  rrOrder.push(winnerId); // 맨 뒤(후순위)로 이동
+  saveRrOrder();
+}
+
+// ── Notion 스핀 이력에서 rrOrder 재구성 ──────────────────────────────────
+async function loadRrOrderFromNotion() {
+  if (!WORKER_URL) return; // Worker 미설정 시 localStorage 그대로 유지
+  try {
+    const res = await fetch(WORKER_URL, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Action': 'get-spinlog' },
+      body:    '{}',
+    });
+    if (!res.ok) return;
+    const { logs } = await res.json();
+    if (!Array.isArray(logs) || logs.length === 0) return;
+
+    // 각 멤버의 마지막 선정 시각 추출 (createdTime 기준 내림차순 정렬된 결과에서 첫 등장)
+    const lastPickTime = {}; // memberId → ISO createdTime
+    for (const log of logs) {
+      const id = log.memberId || MEMBERS.find(m => m.name === log.name)?.id;
+      if (id && !(id in lastPickTime)) lastPickTime[id] = log.createdTime;
+    }
+
+    // 한 번도 안 뽑힌 멤버 = 가장 오래됨(우선순위 최상)
+    const neverPicked = MEMBERS.filter(m => !(m.id in lastPickTime)).map(m => m.id);
+    // 뽑힌 멤버 = 마지막 선정 시각 오름차순 (오래된 순 = 높은 우선순위)
+    const pickedSorted = Object.entries(lastPickTime)
+      .sort(([, a], [, b]) => a < b ? -1 : 1)
+      .map(([id]) => Number(id));
+
+    rrOrder = [...neverPicked, ...pickedSorted];
+    saveRrOrder();
+  } catch (_) { /* Notion 조회 실패 시 localStorage 유지 */ }
+}
+
+// ── 특정 시간대 가용 여부 확인 ────────────────────────────────────────────
+function isMemberAvailable(memberId, dateStr, startTime, endTime) {
+  return !events.some(e =>
+    e.memberId === memberId && e.date === dateStr &&
+    eventsOverlap(startTime, endTime, e.startTime, e.endTime)
+  );
+}
+
+async function openRoulette() {
+  const dateStr = selectedDate();
+  document.getElementById('depDateVal').textContent = dateStr;
+
+  // 배포 시간 셀렉트 초기화 (값 유지)
+  const prevS = document.getElementById('rDepStart')?.value || '09:00';
+  const prevE = document.getElementById('rDepEnd')?.value   || '18:00';
+  populateTimeSelect('rDepStart', prevS);
+  populateTimeSelect('rDepEnd',   prevE);
+
+  // CRM 섹션 초기화
+  document.getElementById('crmSection').classList.remove('visible');
+  document.getElementById('crmTicketCard').classList.remove('visible');
+  document.getElementById('crmStatus').textContent = '';
+  document.getElementById('crmTicketId').value = '';
+
+  document.getElementById('rouletteModal').classList.add('open');
+
+  // Notion 이력 기반 rrOrder 갱신 (비동기, 완료 후 UI 재갱신)
+  await loadRrOrderFromNotion();
+  refreshRoulette();
+}
+
+// 배포 시간 변경 시 또는 열 때 호출 → 가용 멤버 재계산
+function refreshRoulette() {
+  const dateStr  = selectedDate();
+  const depStart = document.getElementById('rDepStart')?.value || '09:00';
+  const depEnd   = document.getElementById('rDepEnd')?.value   || '18:00';
+
+  // 라운드로빈 순서 기준, 해당 시간에 가능한 멤버만 휠에 배치
+  wheelSlices = rrOrder
+    .map(id => MEMBERS.find(m => m.id === id))
+    .filter(m => m && isMemberAvailable(m.id, dateStr, depStart, depEnd));
+
+  lastWinner = null;
+  document.getElementById('rrInfo').textContent =
+    `${depStart}~${depEnd} · 가능 ${wheelSlices.length}명 / 전체 ${MEMBERS.length}명`;
+  document.getElementById('resultBanner').className = 'result-banner';
+  document.getElementById('resultBanner').innerHTML = '';
+  document.getElementById('assignDeployBtn').className = 'assign-deploy-btn';
+  document.getElementById('spinBtn').disabled = wheelSlices.length === 0;
+
+  renderAvailableMembers();
+  if (wheelSlices.length > 0) drawWheelAt(wheelRot);
+}
+
+function closeRoulette() {
+  document.getElementById('rouletteModal').classList.remove('open');
+}
+
+function renderAvailableMembers() {
+  const dateStr  = selectedDate();
+  const depStart = document.getElementById('rDepStart')?.value || '09:00';
+  const depEnd   = document.getElementById('rDepEnd')?.value   || '18:00';
+
+  // 전체 rrOrder 순서로 표시 (가능 여부 색상 구분)
+  document.getElementById('rrQueue').innerHTML = rrOrder.map(id => {
+    const m = MEMBERS.find(x => x.id === id);
+    if (!m) return '';
+    const avail  = isMemberAvailable(m.id, dateStr, depStart, depEnd);
+    const isNext = avail && wheelSlices[0]?.id === id;
+
+    let conflictTxt = '';
+    if (!avail) {
+      const cs = events.filter(e =>
+        e.memberId === m.id && e.date === dateStr &&
+        eventsOverlap(depStart, depEnd, e.startTime, e.endTime)
+      );
+      conflictTxt = cs.map(e => `${e.startTime}~${e.endTime}`).join(', ');
+    }
+    return `<div class="rr-item ${avail ? (isNext ? 'next' : 'avail') : 'unavail'}"
+      title="${avail ? '배포 가능' : '충돌: ' + conflictTxt}">
+      ${isNext ? '<span class="rr-next-badge">●</span>' : ''}
+      ${m.name}
+      ${!avail && conflictTxt ? `<span class="rr-conflict-hint">${conflictTxt}</span>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function drawWheelAt(rot) {
+  const canvas = document.getElementById('wheelCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const cx = canvas.width / 2, cy = canvas.height / 2, r = cx - 6;
+  const n = wheelSlices.length;
+  if (n === 0) return;
+  const arc = (2 * Math.PI) / n;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  wheelSlices.forEach((m, i) => {
+    const startA = rot + i * arc - Math.PI / 2;
+    const endA   = rot + (i + 1) * arc - Math.PI / 2;
+
+    // Slice fill
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, r, startA, endA);
+    ctx.closePath();
+    ctx.fillStyle = WHEEL_COLORS[i % WHEEL_COLORS.length];
+    ctx.fill();
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+
+    // Member name text
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(rot + i * arc + arc / 2 - Math.PI / 2);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = 'white';
+    ctx.font = `bold ${n <= 3 ? 15 : 13}px 'Apple SD Gothic Neo', 'Segoe UI', sans-serif`;
+    ctx.shadowColor = 'rgba(0,0,0,0.35)';
+    ctx.shadowBlur = 4;
+    ctx.fillText(m.name, r - 14, 5);
+    ctx.restore();
+  });
+
+  // Center hub
+  ctx.beginPath();
+  ctx.arc(cx, cy, 20, 0, 2 * Math.PI);
+  ctx.fillStyle = 'white';
+  ctx.shadowColor = 'rgba(0,0,0,0.1)';
+  ctx.shadowBlur = 6;
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = '#e0e0e0';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  ctx.fillStyle = '#1a237e';
+  ctx.font = 'bold 11px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('SPIN', cx, cy);
+}
+
+function spinWheel() {
+  if (spinning || wheelSlices.length === 0) return;
+  spinning = true;
+  document.getElementById('spinBtn').disabled = true;
+  document.getElementById('resultBanner').className = 'result-banner';
+  document.getElementById('assignDeployBtn').className = 'assign-deploy-btn';
+
+  // ✅ 완전 랜덤으로 당첨자 결정
+  const idx  = Math.floor(Math.random() * wheelSlices.length);
+  const winner = wheelSlices[idx];
+  const n    = wheelSlices.length;
+  const arc  = (2 * Math.PI) / n;
+
+  // 랜덤으로 고른 slice[idx]가 포인터(12시 방향)에 오도록 회전각 계산
+  const rawTarget   = -(idx * arc + arc / 2);
+  const currentNorm = ((wheelRot % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+  const targetNorm  = ((rawTarget  % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+  let delta = targetNorm - currentNorm;
+  if (delta <= 0.01) delta += 2 * Math.PI;
+
+  const extraSpins = (5 + Math.floor(Math.random() * 4)) * 2 * Math.PI; // 5~8바퀴
+  const totalDelta = extraSpins + delta;
+
+  const startRot  = wheelRot;
+  const duration  = 3500 + Math.random() * 1200;
+  const startTime = performance.now();
+
+  function animate(now) {
+    const elapsed  = now - startTime;
+    const progress = Math.min(elapsed / duration, 1);
+    const eased    = 1 - Math.pow(1 - progress, 4); // ease-out quart
+    wheelRot = startRot + totalDelta * eased;
+    drawWheelAt(wheelRot);
+
+    if (progress < 1) {
+      requestAnimationFrame(animate);
+    } else {
+      wheelRot = startRot + totalDelta;
+      spinning = false;
+      document.getElementById('spinBtn').disabled = false;
+      lastWinner = winner;
+
+      // 결과 표시
+      const banner = document.getElementById('resultBanner');
+      banner.innerHTML = `🎉 <strong>${winner.name}</strong> 님 선정!<br><small style="font-weight:400">${winner.team}</small>`;
+      banner.className = 'result-banner show';
+      document.getElementById('assignDeployBtn').className = 'assign-deploy-btn show';
+
+      // 선정 이력 저장 + 라운드로빈 순서 갱신
+      const spunAt = new Date().toLocaleString('ko-KR');
+      pickHistory.unshift({
+        name:       winner.name,
+        team:       winner.team,
+        targetDate: selectedDate(),
+        spunAt,
+      });
+      if (pickHistory.length > 100) pickHistory.pop();
+      localStorage.setItem('pickHistory', JSON.stringify(pickHistory));
+      renderHistory();
+      // winner를 라운드로빈 후순위로 이동
+      advanceRrOrder(winner.id);
+
+      // Notion 스핀 이력 기록 (비동기, 실패해도 UI에 영향 없음)
+      if (WORKER_URL) {
+        fetch(WORKER_URL, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Action': 'add-spinlog' },
+          body: JSON.stringify({
+            name:       winner.name,
+            memberId:   winner.id,
+            targetDate: selectedDate(),
+            spunAt,
+          }),
+        }).catch(() => {});
+      }
+
+      // CRM 섹션 표시 (Worker 설정된 경우)
+      if (WORKER_URL) {
+        document.getElementById('crmWinnerLabel').textContent = winner.name;
+        document.getElementById('crmSection').classList.add('visible');
+      }
+    }
+  }
+
+  requestAnimationFrame(animate);
+}
+
+// ─── 이력 탭 렌더링 ────────────────────────────────────────────────────────
+function renderHistory() {
+  const tbody = document.getElementById('historyBody');
+  if (!tbody) return;
+  if (pickHistory.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="3" class="history-empty">아직 선정 이력이 없습니다</td></tr>';
+    return;
+  }
+  tbody.innerHTML = pickHistory.map(h => `
+    <tr>
+      <td>${h.spunAt || ''}</td>
+      <td>${h.targetDate || ''}</td>
+      <td class="history-winner">${h.name}</td>
+    </tr>
+  `).join('');
+}
+
+function resetPickHistory() {
+  if (!confirm('스핀 이력을 전체 삭제할까요?')) return;
+  pickHistory = [];
+  localStorage.setItem('pickHistory', JSON.stringify(pickHistory));
+  renderHistory();
+  showToast('스핀 이력이 삭제되었습니다');
+}
+
+function switchTab(tab) {
+  const isWheel = tab === 'wheel';
+  document.getElementById('panelWheel').classList.toggle('active', isWheel);
+  document.getElementById('panelHistory').classList.toggle('active', !isWheel);
+  document.getElementById('tabWheel').classList.toggle('active', isWheel);
+  document.getElementById('tabHistory').classList.toggle('active', !isWheel);
+  if (!isWheel) renderHistory();
+}
+
+function assignFromWheel() {
+  if (!lastWinner) return;
+  // 돌림판에서 설정한 배포 시간 가져오기
+  const depStart = document.getElementById('rDepStart')?.value || '09:00';
+  const depEnd   = document.getElementById('rDepEnd')?.value   || '18:00';
+  closeRoulette();
+  populateMemberSelect('dMember', lastWinner.id);
+  populateTimeSelect('dStart', depStart);
+  populateTimeSelect('dEnd',   depEnd);
+  document.getElementById('dDate').value  = selectedDate();
+  document.getElementById('dTitle').value = '배포지원';
+  checkDeployConflict();
+  document.getElementById('deployModal').classList.add('open');
+}
+
+// ── 투입 모달: 일정 충돌 감지 ─────────────────────────────────────────────
+function checkDeployConflict() {
+  const memberId = parseInt(document.getElementById('dMember').value);
+  const dateStr  = document.getElementById('dDate').value;
+  const start    = document.getElementById('dStart').value;
+  const end      = document.getElementById('dEnd').value;
+  const warnEl   = document.getElementById('deployConflict');
+  const msgEl    = document.getElementById('deployConflictMsg');
+  if (!warnEl || !memberId || !dateStr || !start || !end) {
+    warnEl?.classList.remove('show'); return;
+  }
+  const cs = events.filter(e =>
+    e.memberId === memberId && e.date === dateStr &&
+    eventsOverlap(start, end, e.startTime, e.endTime)
+  );
+  if (cs.length > 0) {
+    const m = MEMBERS.find(x => x.id === memberId);
+    msgEl.textContent =
+      `${m?.name}님은 해당 시간에 "${cs.map(e=>e.title).join(', ')}" 일정이 있습니다. 그래도 투입하시겠습니까?`;
+    warnEl.classList.add('show');
+  } else {
+    warnEl.classList.remove('show');
+  }
+}
+
+// ─── vtiger CRM 연동 ─────────────────────────────────────────────────────
+let crmCurrentTicket = null;
+
+async function lookupCrmTicket() {
+  const ticketId = document.getElementById('crmTicketId').value.trim();
+  if (!ticketId) { showCrmStatus('티켓 번호를 입력하세요', 'error'); return; }
+  if (!WORKER_URL) { showCrmStatus('Worker URL이 설정되지 않았습니다', 'error'); return; }
+
+  const btn = document.getElementById('crmLookupBtn');
+  btn.disabled = true; btn.textContent = '조회 중…';
+  showCrmStatus('', '');
+  document.getElementById('crmTicketCard').classList.remove('visible');
+
+  try {
+    const res = await fetch(WORKER_URL, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Action': 'vtiger-get-ticket' },
+      body:    JSON.stringify({ ticketId }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '조회 실패');
+
+    crmCurrentTicket = data;
+    document.getElementById('crmTicketTitle').textContent = data.title || `티켓 #${ticketId}`;
+    document.getElementById('crmCurrentAssignee').textContent = data.assigneeId || '—';
+    const link = document.getElementById('crmTicketLink');
+    link.href = data.ticketUrl || '#';
+    link.style.display = data.ticketUrl ? '' : 'none';
+    document.getElementById('crmAssignBtn').disabled = !lastWinner;
+    document.getElementById('crmTicketCard').classList.add('visible');
+  } catch (err) {
+    showCrmStatus(`오류: ${err.message}`, 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = '조회';
+  }
+}
+
+async function updateCrmAssignee() {
+  if (!crmCurrentTicket || !lastWinner || !WORKER_URL) return;
+
+  const btn = document.getElementById('crmAssignBtn');
+  btn.disabled = true; btn.textContent = '변경 중…';
+  showCrmStatus('', '');
+
+  try {
+    const res = await fetch(WORKER_URL, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Action': 'vtiger-update-ticket' },
+      body:    JSON.stringify({
+        ticketId:   document.getElementById('crmTicketId').value.trim(),
+        memberName: lastWinner.name,
+        memberId:   lastWinner.id,
+      }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '변경 실패');
+
+    showCrmStatus(`✅ ${lastWinner.name}님으로 담당자 변경 완료!`, 'success');
+    document.getElementById('crmCurrentAssignee').textContent =
+      data.ticket?.assigned_user_id || '변경됨';
+    btn.textContent = '변경 완료';
+  } catch (err) {
+    showCrmStatus('오류: ' + err.message, 'error');
+    btn.disabled = false;
+    btn.textContent = '담당자 변경';
+  }
+}
+
+function showCrmStatus(msg, type) {
+  const el = document.getElementById('crmStatus');
+  el.textContent = msg;
+  el.className = 'crm-status' + (type ? ' ' + type : '');
+}
+
+// 초기 렌더링
+render();
+</script>
+</body>
+</html>
