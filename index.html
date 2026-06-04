@@ -1174,7 +1174,7 @@ function renderGrid() {
       const cls = TYPE_CLS[ev.type] || 'event-other';
       const isOutlook = !!ev.fromOutlook;
       html += `<div class="allday-event ${cls}${isOutlook?' from-outlook':''}"
-        onclick="${(isOutlook && ev.type !== 'deploy') ? 'void(0)' : `editEvent(event,'${ev.id}')`}"
+        onclick="${(isOutlook && ev.type !== 'deploy') ? 'void(0)' : `editEvent(event,${events.indexOf(ev)})`}"
         title="${ev.title}${ev.note?'\n'+ev.note:''}${isOutlook?'\n[아웃룩 연동]':''}">
         ${ev.title}${isOutlook?'<span class="outlook-badge">OL</span>':''}
       </div>`;
@@ -1234,7 +1234,7 @@ function renderGrid() {
 
       html += `<div class="timed-event-block ${cls}${isOutlook?' from-outlook':''}"
         style="top:${top}px; height:${height}px;"
-        onclick="${(isOutlook && ev.type !== 'deploy') ? 'void(0)' : `editEvent(event,'${ev.id}')`}"
+        onclick="${(isOutlook && ev.type !== 'deploy') ? 'void(0)' : `editEvent(event,${events.indexOf(ev)})`}"
         title="${ev.title}${ev.note?'\n'+ev.note:''}${isOutlook?'\n[아웃룩 연동]':''}">
         <span class="event-time">${clippedTop?'◀':''} ${timeLabel} ${clippedBot?'▶':''}${isOutlook?'<span class="outlook-badge">OL</span>':''}</span>
         ${ev.title}
@@ -1320,9 +1320,14 @@ function cellClick(e, memberId, date, startTime) {
   addContext = { memberId, date, startTime }; editingId = null;
   openEventModal(memberId, date, startTime);
 }
-function editEvent(e, id) {
-  e.stopPropagation(); editingId = id;
-  const ev = events.find(x => x.id===id); if (!ev) return;
+function editEvent(e, idOrIdx) {
+  e.stopPropagation();
+  // 숫자면 배열 인덱스, 문자열이면 ID로 조회 (인덱스가 더 정확)
+  const ev = (typeof idOrIdx === 'number')
+    ? events[idOrIdx]
+    : events.find(x => x.id === idOrIdx);
+  if (!ev) return;
+  editingId = ev.id;
   openEventModal(ev.memberId, ev.date, ev.startTime, ev);
 }
 function openEventModal(memberId, date, startTime, ev=null) {
