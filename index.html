@@ -1174,7 +1174,7 @@ function renderGrid() {
       const cls = TYPE_CLS[ev.type] || 'event-other';
       const isOutlook = !!ev.fromOutlook;
       html += `<div class="allday-event ${cls}${isOutlook?' from-outlook':''}"
-        onclick="${isOutlook ? 'void(0)' : `editEvent(event,'${ev.id}')`}"
+        onclick="${(isOutlook && ev.type !== 'deploy') ? 'void(0)' : `editEvent(event,'${ev.id}')`}"
         title="${ev.title}${ev.note?'\n'+ev.note:''}${isOutlook?'\n[아웃룩 연동]':''}">
         ${ev.title}${isOutlook?'<span class="outlook-badge">OL</span>':''}
       </div>`;
@@ -1234,7 +1234,7 @@ function renderGrid() {
 
       html += `<div class="timed-event-block ${cls}${isOutlook?' from-outlook':''}"
         style="top:${top}px; height:${height}px;"
-        onclick="${isOutlook ? 'void(0)' : `editEvent(event,'${ev.id}')`}"
+        onclick="${(isOutlook && ev.type !== 'deploy') ? 'void(0)' : `editEvent(event,'${ev.id}')`}"
         title="${ev.title}${ev.note?'\n'+ev.note:''}${isOutlook?'\n[아웃룩 연동]':''}">
         <span class="event-time">${clippedTop?'◀':''} ${timeLabel} ${clippedBot?'▶':''}${isOutlook?'<span class="outlook-badge">OL</span>':''}</span>
         ${ev.title}
@@ -1332,8 +1332,11 @@ function openEventModal(memberId, date, startTime, ev=null) {
   document.getElementById('fTitle').value = ev ? ev.title : '';
   document.getElementById('fType').value  = ev ? ev.type  : 'meeting';
   document.getElementById('fNote').value  = ev ? (ev.note||'') : '';
-  document.getElementById('modalTitle').textContent = ev ? '일정 수정' : '일정 추가';
-  document.getElementById('deleteBtn').style.display = ev ? 'inline-flex' : 'none';
+  const isOutlookEv = !!(ev?.fromOutlook);
+  document.getElementById('modalTitle').textContent = ev ? (isOutlookEv ? '📋 배포지원 일정 상세' : '일정 수정') : '일정 추가';
+  document.getElementById('deleteBtn').style.display = (ev && !isOutlookEv) ? 'inline-flex' : 'none';
+  document.querySelector('#eventModal .btn-primary[onclick="saveEvent()"]').style.display = isOutlookEv ? 'none' : '';
+  document.querySelector('#eventModal .btn-secondary[onclick="closeModal()"]').textContent = isOutlookEv ? '닫기' : '취소';
 
   // 배포 타입이면 CRM 섹션 표시
   const isDeployType = (ev?.type === 'deploy') || (document.getElementById('fType').value === 'deploy');
