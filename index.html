@@ -1829,11 +1829,27 @@ async function loadRrOrderFromNotion() {
 }
 
 // ── 특정 시간대 가용 여부 확인 ────────────────────────────────────────────
+// 배포 가능 시간으로 간주할 일정 판별 규칙:
+// 1. 하루종일 + [티켓]/[파트너] 등 대괄호 카테고리 → 배포 가능
+// 2. 시간 단위 + 대괄호 카테고리 + '원격' 포함     → 배포 불가
+// 3. 시간 단위 + 대괄호 카테고리 + '원격' 미포함   → 배포 가능
+function isFreeTimeEvent(e) {
+  const title = e.title || '';
+  const hasBracketCategory = /\[[^\]]+\]/.test(title);  // [xxx] 패턴 감지
+  if (!hasBracketCategory) return false;
+  // 하루종일 일정 → 배포 가능
+  if (e.isAllDay) return true;
+  // 시간 단위 + '원격' 포함 → 배포 불가
+  if (title.includes('원격')) return false;
+  // 시간 단위 + 대괄호 카테고리 + 원격 없음 → 배포 가능
+  return true;
+}
+
 function isMemberAvailable(memberId, dateStr, startTime, endTime) {
   return !events.some(e =>
     e.memberId === memberId && e.date === dateStr &&
     eventsOverlap(startTime, endTime, e.startTime, e.endTime) &&
-    !(e.title || '').includes('[티켓]')    // 🌐 접두어 있어도 인식
+    !isFreeTimeEvent(e)
   );
 }
 
