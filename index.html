@@ -1833,7 +1833,7 @@ function isMemberAvailable(memberId, dateStr, startTime, endTime) {
   return !events.some(e =>
     e.memberId === memberId && e.date === dateStr &&
     eventsOverlap(startTime, endTime, e.startTime, e.endTime) &&
-    !(e.title || '').startsWith('[티켓]')
+    !(e.title || '').includes('[티켓]')    // 🌐 접두어 있어도 인식
   );
 }
 
