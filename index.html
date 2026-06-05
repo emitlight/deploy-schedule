@@ -1003,14 +1003,14 @@ const WORKER_URL = localStorage.getItem('workerUrl') || '';
 
 // ─── Data ───────────────────────────────────────────────────────────────────
 const MEMBERS = [
-  { id: 1, name: '이송민', team: 'Partner Online Platform팀', dept: 'Partner Platform부' },
-  { id: 2, name: '이하영', team: 'Partner Program팀',         dept: 'Partner Platform부' },
-  { id: 3, name: '강진혁', team: 'Appliance Platform팀',     dept: 'Appliance Platform부' },
-  { id: 4, name: '김선우', team: 'Appliance Platform팀',     dept: 'Appliance Platform부' },
-  { id: 5, name: '김요엘', team: 'Security 365 Platform팀',  dept: 'Security 365 Platform부' },
-  { id: 6, name: '윤이나', team: 'Partner Program팀',        dept: 'Partner Platform부' },
-  { id: 7, name: '이정기', team: 'Appliance Platform팀',      dept: 'Appliance Platform부' },
-  { id: 8, name: '김정환', team: 'Partner Online Platform팀', dept: 'Partner Platform부' },
+  { id: 1, name: '이송민', email: 'songmin.lee@softcamp.co.kr',   team: 'Partner Online Platform팀', dept: 'Partner Platform부' },
+  { id: 2, name: '이하영', email: 'hayoung.lee@softcamp.co.kr',   team: 'Partner Program팀',         dept: 'Partner Platform부' },
+  { id: 3, name: '강진혁', email: 'jinhyuck.kang@softcamp.co.kr', team: 'Appliance Platform팀',     dept: 'Appliance Platform부' },
+  { id: 4, name: '김선우', email: 'sunwoo.kim@softcamp.co.kr',    team: 'Appliance Platform팀',     dept: 'Appliance Platform부' },
+  { id: 5, name: '김요엘', email: 'joel.kim@softcamp.co.kr',      team: 'Security 365 Platform팀',  dept: 'Security 365 Platform부' },
+  { id: 6, name: '윤이나', email: 'ina.yun@softcamp.co.kr',       team: 'Partner Program팀',        dept: 'Partner Platform부' },
+  { id: 7, name: '이정기', email: 'jungki.lee@softcamp.co.kr',    team: 'Appliance Platform팀',     dept: 'Appliance Platform부' },
+  { id: 8, name: '김정환', email: 'junghwan.kim@softcamp.co.kr',  team: 'Partner Online Platform팀', dept: 'Partner Platform부' },
 ];
 
 const HOURS     = ['09:00','09:30','10:00','10:30','11:00','11:30','12:00','12:30',
@@ -1494,25 +1494,34 @@ function saveDeployEvent() {
     }
   });
 
-  // 배포 담당자에게 이메일 발송 (비동기)
-  if (WORKER_URL && memberName) {
-    sendDeployEmail(memberName, date, start, end, title)
-      .then(res => {
-        if (res?.ok) showToast(`📧 ${memberName}님께 배정 메일 발송 완료`);
-      })
-      .catch(() => {});
-  }
+  // 배포 담당자에게 메일 클라이언트 열기
+  openMailtoLink(memberName, date, start, end, title);
 }
 
-// ── 배포 담당자에게 이메일 발송 ─────────────────────────────────────────
-async function sendDeployEmail(memberName, date, startTime, endTime, title, note = '') {
-  if (!WORKER_URL) return null;
-  const res = await fetch(WORKER_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Action': 'send-email' },
-    body: JSON.stringify({ toMemberName: memberName, date, startTime, endTime, title, note }),
-  });
-  return res.ok ? await res.json() : null;
+// ── 배포 담당자에게 메일 클라이언트 열기 (mailto) ──────────────────────
+function openMailtoLink(memberName, date, startTime, endTime, title, note = '') {
+  const member = MEMBERS.find(m => m.name === memberName);
+  const toEmail = member?.email || '';
+
+  const subject = `[배포지원 배정] ${title} 담당자로 선정되셨습니다`;
+  const lines = [];
+  lines.push('안녕하세요, ' + memberName + '님');
+  lines.push('');
+  lines.push('아래 배포지원 일정의 담당자로 선정되셨습니다.');
+  lines.push('');
+  lines.push('■ 배포 내용: ' + title);
+  lines.push('■ 날짜: ' + date);
+  lines.push('■ 시간: ' + startTime + ' ~ ' + endTime);
+  if (note) lines.push('■ 메모: ' + note);
+  lines.push('');
+  lines.push('일정 확인 후 문의사항은 이하영(hayoung.lee@softcamp.co.kr)에게 연락해 주세요.');
+  lines.push('');
+  lines.push('본 메일은 배포지원 투입관리 시스템에서 자동 생성되었습니다.');
+  lines.push('https://emitlight.github.io/deploy-schedule/');
+  const body = lines.join('\n');
+
+  const mailto = `mailto:${toEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  window.open(mailto, '_blank');
 }
 
 // ─── Calendar Popup ───────────────────────────────────────────────────────
