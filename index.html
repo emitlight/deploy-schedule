@@ -1494,23 +1494,23 @@ function saveDeployEvent() {
     }
   });
 
-  // 아웃룩 캘린더 초대 생성 (비동기, Worker 설정된 경우)
+  // 배포 담당자에게 이메일 발송 (비동기)
   if (WORKER_URL && memberName) {
-    createOutlookEvent(memberName, date, start, end, title)
+    sendDeployEmail(memberName, date, start, end, title)
       .then(res => {
-        if (res?.ok) showToast(`📅 ${memberName} 아웃룩 일정 초대 완료`);
+        if (res?.ok) showToast(`📧 ${memberName}님께 배정 메일 발송 완료`);
       })
       .catch(() => {});
   }
 }
 
-// ── 아웃룩 캘린더 이벤트 생성 ────────────────────────────────────────────
-async function createOutlookEvent(memberName, date, startTime, endTime, title, note = '') {
+// ── 배포 담당자에게 이메일 발송 ─────────────────────────────────────────
+async function sendDeployEmail(memberName, date, startTime, endTime, title, note = '') {
   if (!WORKER_URL) return null;
   const res = await fetch(WORKER_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Action': 'create-outlook-event' },
-    body: JSON.stringify({ memberName, date, startTime, endTime, title, note }),
+    headers: { 'Content-Type': 'application/json', 'X-Action': 'send-email' },
+    body: JSON.stringify({ toMemberName: memberName, date, startTime, endTime, title, note }),
   });
   return res.ok ? await res.json() : null;
 }
