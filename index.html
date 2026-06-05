@@ -178,12 +178,12 @@
   .dot-free     { background: #e8f5e9; border: 1px solid #a5d6a7; }
 
   /* ── Main Grid ── */
-  .main { padding: 16px 24px; overflow-x: auto; }
-  .grid-header, .allday-row, .timed-slot-row { min-width: 720px; }
+  .main { padding: 16px 24px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .grid-header, .allday-row, .timed-slot-row { min-width: 800px; }
   .grid-container {
     background: white; border-radius: 10px;
     box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-    overflow: hidden; min-width: 820px; /* 900→820, 모바일은 미디어쿼리로 축소 */
+    overflow: hidden; min-width: 880px; /* 8명 기준 */
   }
 
   /* column header */
@@ -559,7 +559,7 @@
 
     /* 그리드 영역: 가로 스크롤 허용 */
     .main { padding: 8px 12px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-    .grid-container { min-width: 680px; border-radius: 8px; }
+    .grid-container { min-width: 800px; border-radius: 8px; }
 
     /* 멤버 헤더 */
     .member-col-header { padding: 8px 6px; }
@@ -591,10 +591,11 @@
   }
 
   @media (max-width: 600px) {
+    body { zoom: 1; }  /* 모바일에서 zoom 해제 → 가로 스크롤 정상 동작 */
     .header-left h1 { font-size: 13px; }
     /* 버튼 일부 숨김 (라운드로빈, 빈시간은 유지) */
     .sync-status { display: none; }
-    .grid-container { min-width: 580px; }
+    .grid-container { min-width: 720px; }
 
     /* 시간 컬럼 더 축소 */
     .grid-header { grid-template-columns: 44px repeat(8, minmax(0,1fr)); }
