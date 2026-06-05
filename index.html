@@ -1437,7 +1437,9 @@ function saveDeployEvent() {
   selectedDay = new Date(date+'T00:00:00');
   currentWeekStart = getMonday(selectedDay);
   closeDeployModal(); render();
-  showToast(`${MEMBERS.find(x=>x.id===memberId)?.name} 배포지원 일정이 투입되었습니다 🚀`);
+  const memberName = MEMBERS.find(x=>x.id===memberId)?.name;
+  showToast(`${memberName} 배포지원 일정이 투입되었습니다 🚀`);
+
   // Notion 저장 (비동기)
   saveEventToNotion(deployEv).then(saved => {
     if (saved.pageId) {
@@ -1445,6 +1447,26 @@ function saveDeployEvent() {
       if (idx !== -1) { events[idx].pageId = saved.pageId; saveDataLocal(); }
     }
   });
+
+  // 아웃룩 캘린더 초대 생성 (비동기, Worker 설정된 경우)
+  if (WORKER_URL && memberName) {
+    createOutlookEvent(memberName, date, start, end, title)
+      .then(res => {
+        if (res?.ok) showToast(`📅 ${memberName} 아웃룩 일정 초대 완료`);
+      })
+      .catch(() => {});
+  }
+}
+
+// ── 아웃룩 캘린더 이벤트 생성 ────────────────────────────────────────────
+async function createOutlookEvent(memberName, date, startTime, endTime, title, note = '') {
+  if (!WORKER_URL) return null;
+  const res = await fetch(WORKER_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Action': 'create-outlook-event' },
+    body: JSON.stringify({ memberName, date, startTime, endTime, title, note }),
+  });
+  return res.ok ? await res.json() : null;
 }
 
 // ─── Calendar Popup ───────────────────────────────────────────────────────
