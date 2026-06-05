@@ -1852,13 +1852,13 @@ function getAvailableDates(memberId, startDate, endDate, startTime, endTime) {
 
 function getDateRange(startDate, endDate) {
   const dates = [];
-  const cur = new Date(startDate + 'T00:00:00');
-  const fin = new Date(endDate   + 'T00:00:00');
+  const cur = new Date(startDate + 'T00:00:00Z');  // UTC 기준 생성 (타임존 버그 방지)
+  const fin = new Date(endDate   + 'T00:00:00Z');
   while (cur <= fin) {
-    const day = cur.getDay(); // 0=일, 6=토
-    if (day !== 0 && day !== 6)   // 평일만
+    const day = cur.getUTCDay(); // 0=일, 6=토
+    if (day !== 0 && day !== 6)  // 평일만
       dates.push(cur.toISOString().slice(0, 10));
-    cur.setDate(cur.getDate() + 1);
+    cur.setUTCDate(cur.getUTCDate() + 1);
   }
   return dates;
 }
