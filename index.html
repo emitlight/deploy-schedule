@@ -918,8 +918,12 @@
     <div class="tab-panel active" id="panelWheel">
       <!-- 배포 예정 시간 설정 -->
       <div class="dep-time-row">
-        <span class="dep-time-label">📅 배포 일시</span>
-        <span class="dep-date-val" id="depDateVal"></span>
+        <span class="dep-time-label">📅 배포 기간</span>
+        <input type="date" id="rDepDateStart" onchange="refreshRoulette()"
+          style="border:1px solid #c5cae9;border-radius:6px;padding:4px 8px;font-size:12px;color:#1a237e;" />
+        <span style="color:#aaa;font-size:12px;">~</span>
+        <input type="date" id="rDepDateEnd" onchange="refreshRoulette()"
+          style="border:1px solid #c5cae9;border-radius:6px;padding:4px 8px;font-size:12px;color:#1a237e;" />
         <select id="rDepStart" onchange="refreshRoulette()"></select>
         <span style="color:#aaa;font-size:12px;">~</span>
         <select id="rDepEnd" onchange="refreshRoulette()"></select>
@@ -1378,8 +1382,40 @@ function saveEvent() {
   if (editingId) {
     const idx = events.findIndex(x => x.id === editingId);
     if (idx !== -1) {
-      const pageId = events[idx].pageId;
-      if (pageId) ev.pageId = pageId;
+      const old = events[idx];
+      if (old.pageId) ev.pageId = old.pageId;
+      // 배포 일정 담당자 변경 → 구 spinLog 삭제 + 신규 담당자 spinLog 추가
+      if (ev.type === 'deploy' && old.memberId !== ev.memberId && WORKER_URL) {
+        const newMember = MEMBERS.find(m => m.id === ev.memberId);
+        const spunAt = new Date().toLocaleString('ko-KR');
+        // 구 담당자 spinLog 삭제
+        if (old.spinLogPageId) {
+          fetch(WORKER_URL, {
+            method:'POST', headers:{'Content-Type':'application/json','X-Action':'delete-spinlog'},
+            body: JSON.stringify({pageId: old.spinLogPageId}),
+          }).catch(()=>{});
+        }
+        // 신규 담당자 spinLog 추가 (후순위 처리)
+        if (newMember) {
+          fetch(WORKER_URL, {
+            method:'POST', headers:{'Content-Type':'application/json','X-Action':'add-spinlog'},
+            body: JSON.stringify({name: newMember.name, memberId: newMember.id, targetDate: ev.date, spunAt}),
+          })
+          .then(r => r.json())
+          .then(d => {
+            if (d.ok && d.pageId) {
+              const i2 = events.findIndex(x => x.id === editingId);
+              if (i2 !== -1) { events[i2].spinLogPageId = d.pageId; saveDataLocal(); }
+            }
+            loadRrOrderFromNotion();
+          }).catch(()=>{});
+          advanceRrOrder(newMember.id);
+          showToast(`⚖️ ${newMember.name}님으로 담당자 변경 → 우선순위 재조정`);
+        }
+        ev.spinLogPageId = null; // 비동기 완료 후 갱신됨
+      } else {
+        ev.spinLogPageId = old.spinLogPageId || null;
+      }
       events[idx] = ev;
     }
   } else {
@@ -1400,8 +1436,18 @@ function deleteEvent() {
   const target = events.find(x => x.id === editingId);
   events = events.filter(x => x.id !== editingId);
   saveData(); closeModal(); render(); showToast('일정이 삭제되었습니다');
-  // Notion 삭제 (비동기)
+  // Notion 이벤트 삭제
   if (target?.pageId) deleteEventFromNotion(target.pageId);
+  // 배포 일정 삭제 → 연결된 spinLog 삭제 → 우선순위 복구
+  if (target?.type === 'deploy' && target?.spinLogPageId && WORKER_URL) {
+    fetch(WORKER_URL, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json','X-Action':'delete-spinlog'},
+      body: JSON.stringify({pageId: target.spinLogPageId}),
+    })
+    .then(() => { showToast('⚖️ 라운드로빈 우선순위가 복구됩니다'); loadRrOrderFromNotion(); })
+    .catch(() => {});
+  }
 }
 
 // ─── Deploy Modal ─────────────────────────────────────────────────────────
@@ -1431,7 +1477,7 @@ function saveDeployEvent() {
   if (!title)    { showToast('배포지원 내용을 입력해 주세요'); return; }
   if (!date)     { showToast('날짜를 선택해 주세요'); return; }
   if (timeToMinutes(start)>=timeToMinutes(end)) { showToast('종료 시간은 시작 시간보다 늦어야 합니다'); return; }
-  const deployEv = { id:`ev_${Date.now()}`, memberId, date, title, type:'deploy', startTime:start, endTime:end, note:'' };
+  const deployEv = { id:`ev_${Date.now()}`, memberId, date, title, type:'deploy', startTime:start, endTime:end, note:'', spinLogPageId: lastSpinLogPageId || null };
   events.push(deployEv);
   saveData();
   selectedDay = new Date(date+'T00:00:00');
@@ -1734,6 +1780,7 @@ let spinning     = false;
 let wheelRot     = 0;
 let wheelSlices  = [];
 let lastWinner   = null;
+let lastSpinLogPageId = null;  // 마지막 스핀의 Notion pageId (배포 취소 시 삭제용)
 
 // ── 라운드로빈 순서 관리 ──────────────────────────────────────────────────
 // 앞쪽 = 다음 차례(가장 오래 안 뽑힌), 뒤쪽 = 최근 선정
@@ -1786,13 +1833,44 @@ function isMemberAvailable(memberId, dateStr, startTime, endTime) {
   return !events.some(e =>
     e.memberId === memberId && e.date === dateStr &&
     eventsOverlap(startTime, endTime, e.startTime, e.endTime) &&
-    !(e.title || '').startsWith('[티켓]')  // [티켓] 접두어 일정은 배포 가능 시간으로 간주
+    !(e.title || '').startsWith('[티켓]')
   );
+}
+
+// 기간 전체에 걸쳐 하루라도 가능한 날이 있으면 true
+function isMemberAvailableInRange(memberId, startDate, endDate, startTime, endTime) {
+  const dates = getDateRange(startDate, endDate);
+  // 기간 중 하루라도 가능한 날이 있으면 투입 가능
+  return dates.some(d => isMemberAvailable(memberId, d, startTime, endTime));
+}
+
+// 기간 내 가능한 날짜 목록 반환
+function getAvailableDates(memberId, startDate, endDate, startTime, endTime) {
+  return getDateRange(startDate, endDate)
+    .filter(d => isMemberAvailable(memberId, d, startTime, endTime));
+}
+
+function getDateRange(startDate, endDate) {
+  const dates = [];
+  const cur = new Date(startDate + 'T00:00:00');
+  const fin = new Date(endDate   + 'T00:00:00');
+  while (cur <= fin) {
+    const day = cur.getDay(); // 0=일, 6=토
+    if (day !== 0 && day !== 6)   // 평일만
+      dates.push(cur.toISOString().slice(0, 10));
+    cur.setDate(cur.getDate() + 1);
+  }
+  return dates;
 }
 
 async function openRoulette() {
   const dateStr = selectedDate();
-  document.getElementById('depDateVal').textContent = dateStr;
+
+  // 배포 기간 초기화 (값 없으면 오늘 날짜)
+  const dsEl = document.getElementById('rDepDateStart');
+  const deEl = document.getElementById('rDepDateEnd');
+  if (!dsEl.value) dsEl.value = dateStr;
+  if (!deEl.value) deEl.value = dateStr;
 
   // 배포 시간 셀렉트 초기화 (값 유지)
   const prevS = document.getElementById('rDepStart')?.value || '09:00';
@@ -1815,18 +1893,20 @@ async function openRoulette() {
 
 // 배포 시간 변경 시 또는 열 때 호출 → 가용 멤버 재계산
 function refreshRoulette() {
-  const dateStr  = selectedDate();
+  const depDateStart = document.getElementById('rDepDateStart')?.value || selectedDate();
+  const depDateEnd   = document.getElementById('rDepDateEnd')?.value   || depDateStart;
   const depStart = document.getElementById('rDepStart')?.value || '09:00';
   const depEnd   = document.getElementById('rDepEnd')?.value   || '18:00';
 
-  // 라운드로빈 순서 기준, 해당 시간에 가능한 멤버만 휠에 배치
+  // 기간 단위 가용 멤버 필터
   wheelSlices = rrOrder
     .map(id => MEMBERS.find(m => m.id === id))
-    .filter(m => m && isMemberAvailable(m.id, dateStr, depStart, depEnd));
+    .filter(m => m && isMemberAvailableInRange(m.id, depDateStart, depDateEnd, depStart, depEnd));
 
   lastWinner = null;
+  const rangeLabel = depDateStart === depDateEnd ? depDateStart : `${depDateStart} ~ ${depDateEnd}`;
   document.getElementById('rrInfo').textContent =
-    `${depStart}~${depEnd} · 가능 ${wheelSlices.length}명 / 전체 ${MEMBERS.length}명`;
+    `${rangeLabel} ${depStart}~${depEnd} · 가능 ${wheelSlices.length}명 / 전체 ${MEMBERS.length}명`;
   document.getElementById('resultBanner').className = 'result-banner';
   document.getElementById('resultBanner').innerHTML = '';
   document.getElementById('assignDeployBtn').className = 'assign-deploy-btn';
@@ -1849,7 +1929,9 @@ function renderAvailableMembers() {
   document.getElementById('rrQueue').innerHTML = rrOrder.map(id => {
     const m = MEMBERS.find(x => x.id === id);
     if (!m) return '';
-    const avail  = isMemberAvailable(m.id, dateStr, depStart, depEnd);
+    const depDateStart2 = document.getElementById('rDepDateStart')?.value || dateStr;
+    const depDateEnd2   = document.getElementById('rDepDateEnd')?.value   || depDateStart2;
+    const avail  = isMemberAvailableInRange(m.id, depDateStart2, depDateEnd2, depStart, depEnd);
 
     let conflictTxt = '';
     if (!avail) {
@@ -1988,7 +2070,8 @@ function spinWheel() {
       // winner를 라운드로빈 후순위로 이동
       advanceRrOrder(winner.id);
 
-      // Notion 스핀 이력 기록 (비동기, 실패해도 UI에 영향 없음)
+      // Notion 스핀 이력 기록 → pageId 저장 (배포 취소 시 연동)
+      lastSpinLogPageId = null;
       if (WORKER_URL) {
         fetch(WORKER_URL, {
           method:  'POST',
@@ -1996,10 +2079,17 @@ function spinWheel() {
           body: JSON.stringify({
             name:       winner.name,
             memberId:   winner.id,
-            targetDate: selectedDate(),
+            targetDate: (() => {
+              const ds = document.getElementById('rDepDateStart')?.value || selectedDate();
+              const de = document.getElementById('rDepDateEnd')?.value   || ds;
+              return ds === de ? ds : `${ds}~${de}`;
+            })(),
             spunAt,
           }),
-        }).catch(() => {});
+        })
+        .then(r => r.json())
+        .then(d => { if (d.ok && d.pageId) lastSpinLogPageId = d.pageId; })
+        .catch(() => {});
       }
 
       // CRM 섹션 표시 (Worker 설정된 경우)
@@ -2056,7 +2146,7 @@ function assignFromWheel() {
   populateMemberSelect('dMember', lastWinner.id);
   populateTimeSelect('dStart', depStart);
   populateTimeSelect('dEnd',   depEnd);
-  document.getElementById('dDate').value  = selectedDate();
+  document.getElementById('dDate').value  = document.getElementById('rDepDateStart')?.value || selectedDate();
   document.getElementById('dTitle').value = '배포지원';
   checkDeployConflict();
   // CRM 섹션에 당첨자 이름 설정
