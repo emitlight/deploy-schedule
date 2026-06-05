@@ -787,7 +787,7 @@
       <select id="fMember"></select>
     </div>
     <div class="form-group">
-      <label>일정 제목</label>
+      <label id="fTitleLabel">일정 제목</label>
       <input type="text" id="fTitle" placeholder="예: 팀 회의, 고객 미팅..." />
     </div>
     <div class="form-group">
@@ -855,8 +855,8 @@
       </select>
     </div>
     <div class="form-group">
-      <label>배포지원 내용 (고객사·프로젝트명)</label>
-      <input type="text" id="dTitle" placeholder="예: A사 클라우드 배포, B제품 현장 설치..." />
+      <label>배포지원 내용</label>
+      <input type="text" id="dTitle" placeholder="배포지원 요청 티켓 ID, 고객사명, 프로젝트명 (예: TT119590 A사 클라우드 배포)" />
     </div>
     <div class="form-row">
       <div class="form-group">
@@ -1351,6 +1351,9 @@ function openEventModal(memberId, date, startTime, ev=null) {
   const isDeployType = (ev?.type === 'deploy') || (document.getElementById('fType').value === 'deploy');
   const crmSection = document.getElementById('eventCrmSection');
   crmSection.classList.toggle('visible', isDeployType);
+  // 제목 label·placeholder 동기화
+  document.getElementById('fTitleLabel').textContent = isDeployType ? '배포지원 내용' : '일정 제목';
+  document.getElementById('fTitle').placeholder = isDeployType ? '배포지원 요청 티켓 ID, 고객사명, 프로젝트명 (예: TT119590 A사 클라우드 배포)' : '예: 팀 회의, 고객 미팅...';
   document.getElementById('eventCrmTicketCard').classList.remove('visible');
   document.getElementById('eventCrmTicketId').value = '';
   document.getElementById('eventCrmStatus').textContent = '';
@@ -1430,6 +1433,11 @@ function saveEvent() {
       if (idx !== -1) { events[idx].pageId = saved.pageId; saveDataLocal(); }
     }
   });
+  // 배포지원 유형이면 담당자에게 메일 클라이언트 열기
+  if (ev.type === 'deploy') {
+    const m = MEMBERS.find(x => x.id === ev.memberId);
+    if (m) openMailtoLink(m.name, ev.date, ev.startTime, ev.endTime, ev.title, ev.note || '');
+  }
 }
 function deleteEvent() {
   if (!editingId) return;
@@ -2355,6 +2363,16 @@ function toggleEventCrmByType() {
   const memberId = parseInt(document.getElementById('fMember').value);
   const m = MEMBERS.find(x => x.id === memberId);
   if (m) document.getElementById('eventCrmWinnerLabel').textContent = m.name;
+  // 배포지원 타입이면 제목 label·placeholder를 배포용으로 변경
+  const titleInput = document.getElementById('fTitle');
+  const titleLabel = document.getElementById('fTitleLabel');
+  if (isDeployType) {
+    titleLabel.textContent = '배포지원 내용';
+    titleInput.placeholder = '배포지원 요청 티켓 ID, 고객사명, 프로젝트명 (예: TT119590 A사 클라우드 배포)';
+  } else {
+    titleLabel.textContent = '일정 제목';
+    titleInput.placeholder = '예: 팀 회의, 고객 미팅...';
+  }
 }
 
 async function lookupEventCrmTicket() {
