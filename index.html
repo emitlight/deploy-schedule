@@ -942,6 +942,9 @@
         <canvas id="wheelCanvas" width="300" height="300" onclick="spinWheel()"></canvas>
       </div>
       <div class="result-banner" id="resultBanner"></div>
+      <div id="resetWinnerRow" style="display:none;text-align:center;margin:4px 0;">
+        <button onclick="resetPendingWinner()" style="font-size:11px;padding:3px 10px;border:.5px solid #e0e0e0;border-radius:6px;background:transparent;color:#888;cursor:pointer;">✕ 당첨자 초기화 (다시 추첨)</button>
+      </div>
       <button class="assign-deploy-btn" id="assignDeployBtn" onclick="assignFromWheel()">
         🚀 이 멤버로 배포지원 일정 투입하기
       </button>
@@ -1797,7 +1800,8 @@ let pickHistory  = JSON.parse(localStorage.getItem('pickHistory') || '[]');
 let spinning     = false;
 let wheelRot     = 0;
 let wheelSlices  = [];
-let lastWinner   = null;
+let lastWinner      = null;
+let currentWinner   = null;  // 이번 모달 세션 잠금 당첨자 (배정 확정 전까지 고정)
 let lastSpinLogPageId = null;  // 마지막 스핀의 Notion pageId (배포 취소 시 삭제용)
 
 // ── 라운드로빈 순서 관리 ──────────────────────────────────────────────────
@@ -1940,13 +1944,40 @@ function refreshRoulette() {
     .filter(m => m && isMemberAvailableInRange(m.id, depDateStart, depDateEnd, depStart, depEnd));
 
   lastWinner = null;
+  currentWinner = null;
   const rangeLabel = depDateStart === depDateEnd ? depDateStart : `${depDateStart} ~ ${depDateEnd}`;
   document.getElementById('rrInfo').textContent =
     `${rangeLabel} ${depStart}~${depEnd} · 가능 ${wheelSlices.length}명 / 전체 ${MEMBERS.length}명`;
   document.getElementById('resultBanner').className = 'result-banner';
   document.getElementById('resultBanner').innerHTML = '';
   document.getElementById('assignDeployBtn').className = 'assign-deploy-btn';
-  document.getElementById('spinBtn').disabled = wheelSlices.length === 0;
+  document.getElementById('resetWinnerRow').style.display = 'none';
+  const spinBtnEl = document.getElementById('spinBtn');
+  spinBtnEl.disabled = wheelSlices.length === 0;
+  spinBtnEl.textContent = '🎲 돌리기!';
+
+  // ✅ pendingWinner 복원: 배정 미확정 상태에서 모달 재오픈 시 동일인 유지
+  const savedPending = localStorage.getItem('pendingWinner');
+  if (savedPending) {
+    try {
+      const pw = JSON.parse(savedPending);
+      // wheelSlices에 해당 멤버가 있는지 확인
+      const inSlice = wheelSlices.find(m => m.id === pw.id);
+      if (inSlice) {
+        currentWinner = inSlice;
+        lastWinner    = inSlice;
+        const banner  = document.getElementById('resultBanner');
+        banner.innerHTML = `🎉 <strong>${inSlice.name}</strong> 님 선정!<br><small style="font-weight:400">${inSlice.team} · 배정 대기 중</small>`;
+        banner.className = 'result-banner show';
+        document.getElementById('assignDeployBtn').className = 'assign-deploy-btn show';
+        document.getElementById('resetWinnerRow').style.display = 'block';
+        spinBtnEl.textContent = `🔄 재확인 (${inSlice.name})`;
+      } else {
+        // 해당 기간에 이미 불가능한 멤버면 초기화
+        localStorage.removeItem('pendingWinner');
+      }
+    } catch(e) { localStorage.removeItem('pendingWinner'); }
+  }
 
   renderAvailableMembers();
   if (wheelSlices.length > 0) drawWheelAt(wheelRot);
@@ -1954,6 +1985,40 @@ function refreshRoulette() {
 
 function closeRoulette() {
   document.getElementById('rouletteModal').classList.remove('open');
+  // currentWinner는 닫아도 유지 — pendingWinner(localStorage)가 재오픈 시 복원
+}
+
+function resetPendingWinner() {
+  // 당첨자 초기화 — 다시 추첨 허용
+  const pw = JSON.parse(localStorage.getItem('pendingWinner') || 'null');
+  localStorage.removeItem('pendingWinner');
+  currentWinner = null;
+  lastWinner    = null;
+
+  // ✅ 초기화 이력 Notion에 기록 (추적용 — rrOrder 영향 없음)
+  if (pw && WORKER_URL) {
+    fetch(WORKER_URL, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Action': 'add-resetlog' },
+      body: JSON.stringify({
+        name:        pw.name,
+        memberId:    pw.id,
+        targetDate:  (() => {
+          const ds = document.getElementById('rDepDateStart')?.value || selectedDate();
+          const de = document.getElementById('rDepDateEnd')?.value   || ds;
+          return ds === de ? ds : `${ds}~${de}`;
+        })(),
+        resetAt: new Date().toLocaleString('ko-KR'),
+      }),
+    }).catch(() => {});
+  }
+  document.getElementById('resultBanner').className = 'result-banner';
+  document.getElementById('resultBanner').innerHTML = '';
+  document.getElementById('assignDeployBtn').className = 'assign-deploy-btn';
+  document.getElementById('resetWinnerRow').style.display = 'none';
+  document.getElementById('crmSection').classList.remove('visible');
+  document.getElementById('spinBtn').textContent = '🎲 돌리기!';
+  showToast('당첨자가 초기화되었습니다. 다시 추첨해주세요.');
 }
 
 function renderAvailableMembers() {
@@ -2051,13 +2116,23 @@ function spinWheel() {
   document.getElementById('resultBanner').className = 'result-banner';
   document.getElementById('assignDeployBtn').className = 'assign-deploy-btn';
 
-  // ✅ 완전 랜덤으로 당첨자 결정
-  const idx  = Math.floor(Math.random() * wheelSlices.length);
-  const winner = wheelSlices[idx];
+  // ✅ 당첨자 결정: currentWinner가 있으면 고정, 없으면 랜덤 선정
+  let winner;
+  if (currentWinner) {
+    // 이미 당첨자 확정된 상태 → 같은 사람에게 돌아가도록 고정
+    const lockedIdx = wheelSlices.findIndex(m => m.id === currentWinner.id);
+    winner = lockedIdx >= 0 ? wheelSlices[lockedIdx] : currentWinner;
+  } else {
+    // 첫 스핀: 랜덤 선정 후 잠금
+    winner = wheelSlices[Math.floor(Math.random() * wheelSlices.length)];
+    currentWinner = winner;
+    localStorage.setItem('pendingWinner', JSON.stringify(winner));  // 모달 닫아도 유지
+  }
+  const idx  = wheelSlices.findIndex(m => m.id === winner.id);
   const n    = wheelSlices.length;
   const arc  = (2 * Math.PI) / n;
 
-  // 랜덤으로 고른 slice[idx]가 포인터(12시 방향)에 오도록 회전각 계산
+  // 당첨자 slice가 포인터(12시 방향)에 오도록 회전각 계산
   const rawTarget   = -(idx * arc + arc / 2);
   const currentNorm = ((wheelRot % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
   const targetNorm  = ((rawTarget  % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
@@ -2083,7 +2158,6 @@ function spinWheel() {
     } else {
       wheelRot = startRot + totalDelta;
       spinning = false;
-      document.getElementById('spinBtn').disabled = false;
       lastWinner = winner;
 
       // 결과 표시
@@ -2092,7 +2166,13 @@ function spinWheel() {
       banner.className = 'result-banner show';
       document.getElementById('assignDeployBtn').className = 'assign-deploy-btn show';
 
-      // 선정 이력 저장 + 라운드로빈 순서 갱신
+      // 버튼 텍스트: 당첨자 고정 상태 표시
+      const spinBtn = document.getElementById('spinBtn');
+      spinBtn.disabled = false;
+      spinBtn.textContent = `🔄 재확인 (${winner.name})`;
+      document.getElementById('resetWinnerRow').style.display = 'block';
+
+      // 스핀 이력 표시용 저장 (UI 전용, 우선순위 갱신은 배정 확정 시 실행)
       const spunAt = new Date().toLocaleString('ko-KR');
       pickHistory.unshift({
         name:       winner.name,
@@ -2103,30 +2183,9 @@ function spinWheel() {
       if (pickHistory.length > 100) pickHistory.pop();
       localStorage.setItem('pickHistory', JSON.stringify(pickHistory));
       renderHistory();
-      // winner를 라운드로빈 후순위로 이동
-      advanceRrOrder(winner.id);
 
-      // Notion 스핀 이력 기록 → pageId 저장 (배포 취소 시 연동)
-      lastSpinLogPageId = null;
-      if (WORKER_URL) {
-        fetch(WORKER_URL, {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Action': 'add-spinlog' },
-          body: JSON.stringify({
-            name:       winner.name,
-            memberId:   winner.id,
-            targetDate: (() => {
-              const ds = document.getElementById('rDepDateStart')?.value || selectedDate();
-              const de = document.getElementById('rDepDateEnd')?.value   || ds;
-              return ds === de ? ds : `${ds}~${de}`;
-            })(),
-            spunAt,
-          }),
-        })
-        .then(r => r.json())
-        .then(d => { if (d.ok && d.pageId) lastSpinLogPageId = d.pageId; })
-        .catch(() => {});
-      }
+      // ⚠️ advanceRrOrder 및 add-spinlog는 배정 확정(assignFromWheel) 시점으로 이동
+      // → 스핀만으로는 우선순위·Notion 기록 변경 없음
 
       // CRM 섹션 표시 (Worker 설정된 경우)
       if (WORKER_URL) {
@@ -2175,19 +2234,48 @@ function switchTab(tab) {
 
 function assignFromWheel() {
   if (!lastWinner) return;
+  const confirmed = lastWinner;
+
+  // ✅ 배정 확정 — pendingWinner 삭제 (잠금 해제)
+  localStorage.removeItem('pendingWinner');
+
+  // ✅ 배정 확정 시점에 라운드로빈 우선순위 갱신 + Notion 기록
+  advanceRrOrder(confirmed.id);
+
+  lastSpinLogPageId = null;
+  if (WORKER_URL) {
+    const spunAt = new Date().toLocaleString('ko-KR');
+    fetch(WORKER_URL, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Action': 'add-spinlog' },
+      body: JSON.stringify({
+        name:       confirmed.name,
+        memberId:   confirmed.id,
+        targetDate: (() => {
+          const ds = document.getElementById('rDepDateStart')?.value || selectedDate();
+          const de = document.getElementById('rDepDateEnd')?.value   || ds;
+          return ds === de ? ds : `${ds}~${de}`;
+        })(),
+        spunAt,
+      }),
+    })
+    .then(r => r.json())
+    .then(d => { if (d.ok && d.pageId) lastSpinLogPageId = d.pageId; })
+    .catch(() => {});
+  }
+
   // 돌림판에서 설정한 배포 시간 가져오기
   const depStart = document.getElementById('rDepStart')?.value || '09:00';
   const depEnd   = document.getElementById('rDepEnd')?.value   || '18:00';
   closeRoulette();
-  populateMemberSelect('dMember', lastWinner.id);
+  populateMemberSelect('dMember', confirmed.id);
   populateTimeSelect('dStart', depStart);
   populateTimeSelect('dEnd',   depEnd);
   document.getElementById('dDate').value  = document.getElementById('rDepDateStart')?.value || selectedDate();
   document.getElementById('dTitle').value = '배포지원';
   checkDeployConflict();
   // CRM 섹션에 당첨자 이름 설정
-  const winnerName = lastWinner?.name || '';
-  document.getElementById('deployCrmWinnerLabel').textContent = winnerName;
+  document.getElementById('deployCrmWinnerLabel').textContent = confirmed.name;
   document.getElementById('deployModal').classList.add('open');
 }
 
