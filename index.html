@@ -727,6 +727,7 @@
     <button class="btn btn-white" id="toggleFreeBtn" onclick="toggleFreeSlots()">🟢 빈 시간 보기</button>
     <button class="btn btn-outlook" id="syncBtn" onclick="syncOutlook()">☁️ 아웃룩 동기화</button>
     <button class="btn" onclick="openGuideModal()" style="background:#fff;color:#3949ab;border:1.5px solid #c5cae9;font-weight:700;">📖 사용가이드</button>
+    <button class="btn" onclick="openTagModal()" style="background:#fff;color:#00897b;border:1.5px solid #b2dfdb;font-weight:700;">🏷️ 태그 안내</button>
         <button class="btn btn-deploy" onclick="openDeployModal()">🚀 배포지원 투입</button>
   </div>
 </div>
@@ -798,6 +799,15 @@
         <option value="deploy">🔴 배포지원</option>
         <option value="out">⚫ 외근/휴가</option>
         <option value="other">🟤 기타</option>
+      </select>
+    </div>
+    <div class="form-group" id="overrideGroup" style="display:none;">
+      <label>배포지원 분류 <span style="font-weight:400;color:#999;font-size:11px;">(가용 판단 반영 · 선택 즉시 저장 · 아웃룩 미반영)</span></label>
+      <select id="fOverride" onchange="applyTagOverride()">
+        <option value="auto">🏷️ 자동 (태그 기반)</option>
+        <option value="available">✅ 배포지원 가능</option>
+        <option value="blocking">⛔ 배포지원 불가</option>
+        <option value="urgent">⚠️ 긴급 (빼지 마세요)</option>
       </select>
     </div>
     <div class="form-row">
@@ -1182,7 +1192,7 @@ function renderGrid() {
       const cls = TYPE_CLS[ev.type] || 'event-other';
       const isOutlook = !!ev.fromOutlook;
       html += `<div class="allday-event ${cls}${isOutlook?' from-outlook':''}"
-        onclick="${(isOutlook && ev.type !== 'deploy') ? 'void(0)' : `editEvent(event,${events.indexOf(ev)})`}"
+        onclick="editEvent(event,${events.indexOf(ev)})"
         title="${ev.title}${ev.note?'\n'+ev.note:''}${isOutlook?'\n[아웃룩 연동]':''}">
         ${ev.title}${isOutlook?'<span class="outlook-badge">OL</span>':''}
       </div>`;
@@ -1242,7 +1252,7 @@ function renderGrid() {
 
       html += `<div class="timed-event-block ${cls}${isOutlook?' from-outlook':''}"
         style="top:${top}px; height:${height}px;"
-        onclick="${(isOutlook && ev.type !== 'deploy') ? 'void(0)' : `editEvent(event,${events.indexOf(ev)})`}"
+        onclick="editEvent(event,${events.indexOf(ev)})"
         title="${ev.title}${ev.note?'\n'+ev.note:''}${isOutlook?'\n[아웃룩 연동]':''}">
         <span class="event-time">${clippedTop?'◀':''} ${timeLabel} ${clippedBot?'▶':''}${isOutlook?'<span class="outlook-badge">OL</span>':''}</span>
         ${ev.title}
@@ -1366,11 +1376,33 @@ function openEventModal(memberId, date, startTime, ev=null) {
     if (m) document.getElementById('eventCrmWinnerLabel').textContent = m.name;
   }
 
+  // 배포지원 분류 오버라이드 (기존 일정에만 표시 — 아웃룩 일정 포함)
+  const ovGroup = document.getElementById('overrideGroup');
+  if (ev) {
+    ovGroup.style.display = '';
+    const cur = tagOverrides[ev.id];
+    document.getElementById('fOverride').value =
+      (cur === 'available' || cur === 'blocking' || cur === 'urgent') ? cur : 'auto';
+  } else {
+    ovGroup.style.display = 'none';
+  }
+
   document.getElementById('eventModal').classList.add('open');
 }
 function closeModal() {
   document.getElementById('eventModal').classList.remove('open');
   editingId = null; addContext = null;
+}
+// 일정별 배포지원 분류 수동 오버라이드 — 즉시 저장 후 재렌더 (아웃룩 일정도 가능)
+function applyTagOverride() {
+  if (!editingId) { showToast('먼저 일정을 선택해 주세요'); return; }
+  const v = document.getElementById('fOverride').value;
+  if (v === 'auto') delete tagOverrides[editingId];
+  else tagOverrides[editingId] = v;
+  saveTagOverrides();
+  render();
+  const label = { available:'✅ 가능', blocking:'⛔ 불가', urgent:'⚠️ 긴급', auto:'🏷️ 자동(태그 기반)' }[v] || v;
+  showToast(`배포지원 분류: ${label} 저장됨`);
 }
 function saveEvent() {
   const title = document.getElementById('fTitle').value.trim();
@@ -1850,23 +1882,51 @@ async function loadRrOrderFromNotion() {
   } catch (_) { /* Notion 조회 실패 시 localStorage 유지 */ }
 }
 
-// ── 특정 시간대 가용 여부 확인 ────────────────────────────────────────────
-// 배포 가능 시간으로 간주할 일정 판별 규칙:
-// 1. 하루종일 + [티켓] 또는 [파트너] 포함 → 배포 가능
-// 2. 시간 단위 + [티켓]/[파트너] + '원격' 포함 → 배포 불가
-// 3. 시간 단위 + [티켓]/[파트너] + '원격' 미포함 → 배포 가능
-const FREE_CATEGORIES = ['[티켓]', '[파트너]'];  // 배포 가능으로 인식할 카테고리
+// ── 배포지원 가용 여부 판별 (태그 화이트리스트 + 수동 오버라이드) ──────────────
+// 규칙: "빼도 되는 업무" 태그가 있으면 가능, 그 외(무태그·고객사명·휴가 등)는 불가.
+//  - 하루종일이어도 가능태그([티켓]/[내부] 등)면 배포 가능
+//  - 시간단위 + '원격' = 불가 (원격 지원 중)
+//  - 가능태그 + [긴급] = 풀엔 포함하되 ⚠️ 주의 (매니저 판단)
+//  - 대시보드에서 일정별 수동 분류 오버라이드 가능 (tagOverrides, 아웃룩 미반영)
+const AVAILABLE_TAGS = ['[티켓]', '[파트너]', '[내부]', '[교육]', '[대기]'];  // 배포 가능으로 인식할 태그
+const TAG_SYNONYMS   = { '[내부업무]': '[내부]', '[내부 업무]': '[내부]' };     // 기존 일정 호환 정규화
+const URGENT_TAG     = '[긴급]';
+
+// 일정별 수동 분류 오버라이드: eventId → 'available' | 'blocking' | 'urgent'
+let tagOverrides = JSON.parse(localStorage.getItem('tagOverrides') || '{}');
+function saveTagOverrides() { localStorage.setItem('tagOverrides', JSON.stringify(tagOverrides)); }
+
+function normalizeTitle(title) {
+  let t = title || '';
+  for (const k in TAG_SYNONYMS) t = t.split(k).join(TAG_SYNONYMS[k]);
+  return t;
+}
+
+// 일정의 배포지원 분류 반환: 'available' | 'urgent' | 'blocking'
+function classifyAvailability(e) {
+  const ov = e.id ? tagOverrides[e.id] : null;
+  if (ov === 'available' || ov === 'blocking' || ov === 'urgent') return ov;  // 수동 오버라이드 우선
+  const title = normalizeTitle(e.title);
+  const hasAvailableTag = AVAILABLE_TAGS.some(tag => title.includes(tag));
+  if (!hasAvailableTag) return 'blocking';                       // 무태그·고객사명·외근·휴가 등 = 불가
+  if (!e.isAllDay && title.includes('원격')) return 'blocking';  // 시간단위 원격 지원 중 = 불가
+  if (title.includes(URGENT_TAG)) return 'urgent';              // 가능태그 + [긴급] = 주의
+  return 'available';                                            // 하루종일이어도 가능태그면 가능
+}
 
 function isFreeTimeEvent(e) {
-  const title = e.title || '';
-  const hasFreeCategory = FREE_CATEGORIES.some(cat => title.includes(cat));
-  if (!hasFreeCategory) return false;
-  // 하루종일 + [티켓]/[파트너] → 배포 가능
-  if (e.isAllDay) return true;
-  // 시간 단위 + '원격' 포함 → 배포 불가
-  if (title.includes('원격')) return false;
-  // 시간 단위 + [티켓]/[파트너] + 원격 없음 → 배포 가능
-  return true;
+  const c = classifyAvailability(e);
+  return c === 'available' || c === 'urgent';  // urgent도 가용 풀 포함 (⚠️로 표시)
+}
+
+// 멤버가 해당 기간·시간에 [긴급] 분류 일정이 있는지 (있으면 ⚠️ 주의 표시)
+function memberHasUrgentInRange(memberId, startDate, endDate, startTime, endTime) {
+  const dates = getDateRange(startDate, endDate);
+  return events.some(e =>
+    e.memberId === memberId && dates.includes(e.date) &&
+    eventsOverlap(startTime, endTime, e.startTime || '09:00', e.endTime || '18:00') &&
+    classifyAvailability(e) === 'urgent'
+  );
 }
 
 function isMemberAvailable(memberId, dateStr, startTime, endTime) {
@@ -2033,6 +2093,7 @@ function renderAvailableMembers() {
     const depDateStart2 = document.getElementById('rDepDateStart')?.value || dateStr;
     const depDateEnd2   = document.getElementById('rDepDateEnd')?.value   || depDateStart2;
     const avail  = isMemberAvailableInRange(m.id, depDateStart2, depDateEnd2, depStart, depEnd);
+    const urgent = avail && memberHasUrgentInRange(m.id, depDateStart2, depDateEnd2, depStart, depEnd);
 
     let conflictTxt = '';
     if (!avail) {
@@ -2043,8 +2104,8 @@ function renderAvailableMembers() {
       conflictTxt = cs.map(e => `${e.startTime}~${e.endTime}`).join(', ');
     }
     return `<div class="rr-item ${avail ? 'avail' : 'unavail'}"
-      title="${avail ? '배포 가능' : '충돌: ' + conflictTxt}">
-
+      title="${avail ? (urgent ? '⚠️ 가능하나 긴급 업무 중 — 신중 판단' : '배포 가능') : '충돌: ' + conflictTxt}">
+      ${urgent ? '<span style="margin-right:2px;" title="긴급 업무 중">⚠️</span>' : ''}
       ${m.name}
       ${!avail && conflictTxt ? `<span class="rr-conflict-hint">${conflictTxt}</span>` : ''}
     </div>`;
@@ -2545,9 +2606,14 @@ async function openGuideModal() {
 function closeGuideModal() {
   document.getElementById('guideModal').classList.remove('open');
 }
+function openTagModal()  { document.getElementById('tagModal').classList.add('open'); }
+function closeTagModal() { document.getElementById('tagModal').classList.remove('open'); }
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('guideModal')?.addEventListener('click', function(e) {
     if (e.target === this) closeGuideModal();
+  });
+  document.getElementById('tagModal')?.addEventListener('click', function(e) {
+    if (e.target === this) closeTagModal();
   });
 });
 
@@ -2561,6 +2627,50 @@ document.addEventListener('DOMContentLoaded', () => {
         <button onclick="closeGuideModal()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#888;">✕</button>
       </div>
       <div class="guide-modal-body" id="guideModalBody"></div>
+    </div>
+  </div>
+
+  <!-- 태그 안내 모달 -->
+  <div class="guide-modal-overlay" id="tagModal">
+    <div class="guide-modal">
+      <div class="guide-modal-header">
+        🏷️ 아웃룩 일정 태깅 규칙
+        <button onclick="closeTagModal()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#888;">✕</button>
+      </div>
+      <div class="guide-modal-body">
+        <p style="margin:0 0 12px;color:#444;">아웃룩 일정 <b>제목 맨 앞</b>에 아래 태그를 붙여주세요. 시스템이 이 태그로 배포지원 가능 여부를 자동 판단합니다.</p>
+        <div style="background:#e8f5e9;border:1px solid #a5d6a7;border-radius:8px;padding:10px 12px;margin-bottom:10px;">
+          <div style="font-weight:700;color:#2e7d32;margin-bottom:6px;">✅ 배포지원 가능 (빼도 되는 업무)</div>
+          <table style="width:100%;border-collapse:collapse;font-size:13px;">
+            <tr><td style="padding:3px 6px;width:96px;"><b>[티켓]</b></td><td>CRM 티켓 처리</td><td style="color:#777;">[티켓] TT119590 처리</td></tr>
+            <tr><td style="padding:3px 6px;"><b>[파트너]</b></td><td>파트너사 지원</td><td style="color:#777;">[파트너] A사 문의 대응</td></tr>
+            <tr><td style="padding:3px 6px;"><b>[내부]</b></td><td>내부 업무</td><td style="color:#777;">[내부] 문서 작성</td></tr>
+            <tr><td style="padding:3px 6px;"><b>[교육]</b></td><td>교육 수강·준비</td><td style="color:#777;">[교육] 보안 교육</td></tr>
+            <tr><td style="padding:3px 6px;"><b>[대기]</b></td><td>여유·대기</td><td style="color:#777;">[대기]</td></tr>
+          </table>
+        </div>
+        <div style="background:#ffebee;border:1px solid #ef9a9a;border-radius:8px;padding:10px 12px;margin-bottom:10px;">
+          <div style="font-weight:700;color:#c62828;margin-bottom:6px;">⛔ 배포지원 불가 (빼면 안 되는 업무)</div>
+          <table style="width:100%;border-collapse:collapse;font-size:13px;">
+            <tr><td style="padding:3px 6px;width:96px;"><b>[고객사]</b></td><td>고객사 현장·전담</td><td style="color:#777;">[고객사] 기아 현장지원</td></tr>
+            <tr><td style="padding:3px 6px;"><b>[외근]·[출장]</b></td><td>외근·출장</td><td style="color:#777;">[외근] 고객 미팅</td></tr>
+            <tr><td style="padding:3px 6px;">연차·반차·휴가</td><td>휴가류(태그 없어도 인식)</td><td style="color:#777;">연차 / 반차</td></tr>
+          </table>
+          <div style="font-size:12px;color:#b71c1c;margin-top:6px;">※ <b>태그를 안 달면 '불가'로 처리</b>됩니다(일정이 있다 = 업무 중). 가능한 업무는 꼭 위 태그를 달아주세요.</div>
+        </div>
+        <div style="background:#fff8e1;border:1px solid #ffe082;border-radius:8px;padding:10px 12px;margin-bottom:10px;">
+          <div style="font-weight:700;color:#f57f17;margin-bottom:6px;">⚠️ 긴급 (가능 업무지만 빼지 말아주세요)</div>
+          <div style="font-size:13px;">가능 태그 + <b>[긴급]</b> → 풀에는 포함되지만 매니저가 ⚠️로 보고 신중히 판단합니다.<br><span style="color:#777;">예: [티켓][긴급] 장애 대응 중</span></div>
+        </div>
+        <div style="background:#e3f2fd;border:1px solid #90caf9;border-radius:8px;padding:10px 12px;">
+          <div style="font-weight:700;color:#1565c0;margin-bottom:4px;">💡 핵심 포인트</div>
+          <ul style="margin:0;padding-left:18px;font-size:13px;line-height:1.6;">
+            <li><b>하루종일</b> 일정이어도 [티켓]·[내부] 등 가능 태그면 <b>배포지원 가능</b>으로 잡힙니다.</li>
+            <li>고객사명([기아]·[신한카드] 등)을 직접 쓰면 자동으로 '불가' 처리됩니다.</li>
+            <li>매니저는 각 일정을 클릭해 <b>배포지원 분류를 수동 조정</b>할 수 있습니다.</li>
+          </ul>
+        </div>
+      </div>
     </div>
   </div>
 </body>
