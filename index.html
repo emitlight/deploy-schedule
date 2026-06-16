@@ -1393,16 +1393,30 @@ function closeModal() {
   document.getElementById('eventModal').classList.remove('open');
   editingId = null; addContext = null;
 }
-// 일정별 배포지원 분류 수동 오버라이드 — 즉시 저장 후 재렌더 (아웃룩 일정도 가능)
+// 일정별 배포지원 분류 수동 설정 — Notion 저장(모두 공유) + 즉시 재렌더 (아웃룩 일정도 가능)
 function applyTagOverride() {
   if (!editingId) { showToast('먼저 일정을 선택해 주세요'); return; }
-  const v = document.getElementById('fOverride').value;
-  if (v === 'auto') delete tagOverrides[editingId];
-  else tagOverrides[editingId] = v;
-  saveTagOverrides();
-  render();
+  const v  = document.getElementById('fOverride').value;  // auto|available|blocking|urgent
+  const ev = events.find(x => x.id === editingId);
+  if (!ev) return;
+  // 로컬 즉시 반영 (Notion 분류 필드 + localStorage 폴백)
+  if (v === 'auto') { delete tagOverrides[ev.id]; ev.classification = null; }
+  else { tagOverrides[ev.id] = v; ev.classification = CLS_TO_KR[v]; }
+  saveTagOverrides(); saveDataLocal(); render();
   const label = { available:'✅ 가능', blocking:'⛔ 불가', urgent:'⚠️ 긴급', auto:'🏷️ 자동(태그 기반)' }[v] || v;
-  showToast(`배포지원 분류: ${label} 저장됨`);
+  showToast(`배포지원 분류: ${label}`);
+  // Notion 저장 (다른 사람에게도 반영) — Notion 페이지(pageId) 있을 때만
+  if (WORKER_URL && ev.pageId) {
+    fetch(WORKER_URL, {
+      method:'POST', headers:{'Content-Type':'application/json','X-Action':'set-classification'},
+      body: JSON.stringify({ pageId: ev.pageId, classification: v === 'auto' ? null : CLS_TO_KR[v] }),
+    })
+    .then(r => r.json())
+    .then(d => { if (!d.ok) showToast('⚠️ Notion 저장 실패 — 로컬만 반영됨'); })
+    .catch(() => showToast('⚠️ Notion 저장 실패(네트워크) — 로컬만 반영됨'));
+  } else if (!ev.pageId) {
+    showToast('ℹ️ Notion 미저장 일정 — 동기화 후 공유됩니다');
+  }
 }
 function saveEvent() {
   const title = document.getElementById('fTitle').value.trim();
@@ -1898,14 +1912,24 @@ function saveTagOverrides() { localStorage.setItem('tagOverrides', JSON.stringif
 
 function normalizeTitle(title) {
   let t = title || '';
+  // 태그 안에 '완료/' 같은 접두어가 있으면 마지막 '/' 뒤 텍스트만 태그로 인식
+  // 예: [완료/티켓] → [티켓], [완료/내부업무] → [내부업무]
+  t = t.replace(/\[[^\]]*\/\s*([^\]]*?)\s*\]/g, '[$1]');
   for (const k in TAG_SYNONYMS) t = t.split(k).join(TAG_SYNONYMS[k]);
   return t;
 }
 
+// Notion 저장 분류(한글) → 내부 값 매핑
+const CLS_FROM_KR = { '가능':'available', '불가':'blocking', '긴급':'urgent' };
+const CLS_TO_KR   = { available:'가능', blocking:'불가', urgent:'긴급' };
 // 일정의 배포지원 분류 반환: 'available' | 'urgent' | 'blocking'
 function classifyAvailability(e) {
+  // 1. Notion 저장 분류 우선 (load-events로 받아옴 → 모두에게 공유됨)
+  const nc = CLS_FROM_KR[e.classification];
+  if (nc) return nc;
+  // 2. localStorage 폴백 (pageId 없거나 Notion 저장 전/실패 시)
   const ov = e.id ? tagOverrides[e.id] : null;
-  if (ov === 'available' || ov === 'blocking' || ov === 'urgent') return ov;  // 수동 오버라이드 우선
+  if (ov === 'available' || ov === 'blocking' || ov === 'urgent') return ov;
   const title = normalizeTitle(e.title);
   const hasAvailableTag = AVAILABLE_TAGS.some(tag => title.includes(tag));
   if (!hasAvailableTag) return 'blocking';                       // 무태그·고객사명·외근·휴가 등 = 불가

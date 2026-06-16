@@ -216,6 +216,22 @@ export default {
           break;
         }
 
+        // ── 배포지원 분류 수동 설정 (Notion 저장 → 모두에게 공유) ──────────
+        // SCHEDULES_DB의 '배포분류' Select에 저장. run-sync는 자기 속성만 PATCH하므로
+        // 재동기화해도 이 값은 보존됨. classification: '가능'|'불가'|'긴급' 또는 빈값(해제)
+        case 'set-classification': {
+          if (!env.NOTION_SECRET||!env.SCHEDULES_DB_ID) throw new Error('Notion 미설정');
+          if (!body.pageId) throw new Error('pageId 필요');
+          // '배포분류' 속성 보장 (없으면 생성 — idempotent, 실패해도 무시)
+          await notion(env,'PATCH',`/databases/${env.SCHEDULES_DB_ID}`,
+            {properties:{'배포분류':{select:{options:[{name:'가능'},{name:'불가'},{name:'긴급'}]}}}}).catch(()=>{});
+          const val=body.classification;
+          await notion(env,'PATCH',`/pages/${body.pageId}`,
+            {properties:{'배포분류': val ? {select:{name:val}} : {select:null}}});
+          result={ok:true};
+          break;
+        }
+
         // ── 스핀 이력 추가 ───────────────────────────────────────────────
         case 'add-spinlog': {
           if (!env.NOTION_SECRET||!env.SPINLOG_DB_ID) throw new Error('Notion 미설정');
@@ -576,6 +592,7 @@ function parseNotionSchedule(page) {
     fromOutlook:p['아웃룩여부']?.checkbox||false,
     isAllDay:   p['하루종일']?.checkbox||false,
     outlookId:  getNotionRichText(p,'아웃룩ID'),
+    classification: p['배포분류']?.select?.name || null,  // 수동 분류 (가능/불가/긴급) — 모두 공유
   };
 }
 
