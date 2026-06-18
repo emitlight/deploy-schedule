@@ -355,6 +355,7 @@
     background: white; border-radius: 12px; padding: 24px;
     width: 380px; box-shadow: 0 20px 60px rgba(0,0,0,0.2);
     transform: translateY(8px); transition: transform 0.2s;
+    max-height: 90vh; overflow-y: auto;  /* 작은 화면에서 내용 길면 내부 스크롤 */
   }
   .modal-overlay.open .modal { transform: translateY(0); }
   .modal h3 { font-size: 16px; font-weight: 700; margin-bottom: 18px; color: #1a237e; }
