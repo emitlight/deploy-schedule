@@ -1904,6 +1904,7 @@ async function loadRrOrderFromNotion() {
 //  - 가능태그 + [긴급] = 풀엔 포함하되 ⚠️ 주의 (매니저 판단)
 //  - 대시보드에서 일정별 수동 분류 오버라이드 가능 (tagOverrides, 아웃룩 미반영)
 const AVAILABLE_TAGS = ['[티켓]', '[파트너]', '[내부]', '[교육]', '[대기]'];  // 배포 가능으로 인식할 태그
+const AVAILABLE_KEYWORDS = ['티켓', '파트너', '내부', '교육', '대기'];  // 대괄호 안 '첫 단어'가 이 중 하나면 가능 ([티켓_고객사]·[티켓 OO사]도 인식)
 const TAG_SYNONYMS   = { '[내부업무]': '[내부]', '[내부 업무]': '[내부]' };     // 기존 일정 호환 정규화
 const URGENT_TAG     = '[긴급]';
 
@@ -1924,6 +1925,12 @@ function normalizeTitle(title) {
 const CLS_FROM_KR = { '가능':'available', '불가':'blocking', '긴급':'urgent' };
 const CLS_TO_KR   = { available:'가능', blocking:'불가', urgent:'긴급' };
 // 일정의 배포지원 분류 반환: 'available' | 'urgent' | 'blocking'
+// 대괄호 태그의 '첫 단어'가 가능 키워드면 true ([티켓]·[티켓_고객사]·[티켓 OO사]·[파트너_인니] 모두 인식. '대기업'처럼 단어가 다르면 제외)
+function titleHasAvailableTag(title) {
+  const tags = (title || '').match(/\[([^\]]+)\]/g) || [];
+  return tags.some(raw => AVAILABLE_KEYWORDS.includes(raw.slice(1, -1).split(/[_\s/·:,\-]/)[0]));
+}
+
 function classifyAvailability(e) {
   // 1. Notion 저장 분류 우선 (load-events로 받아옴 → 모두에게 공유됨)
   const nc = CLS_FROM_KR[e.classification];
@@ -1932,8 +1939,7 @@ function classifyAvailability(e) {
   const ov = e.id ? tagOverrides[e.id] : null;
   if (ov === 'available' || ov === 'blocking' || ov === 'urgent') return ov;
   const title = normalizeTitle(e.title);
-  const hasAvailableTag = AVAILABLE_TAGS.some(tag => title.includes(tag));
-  if (!hasAvailableTag) return 'blocking';                       // 무태그·고객사명·외근·휴가 등 = 불가
+  if (!titleHasAvailableTag(title)) return 'blocking';          // 무태그·고객사명·외근·휴가 등 = 불가
   if (!e.isAllDay && title.includes('원격')) return 'blocking';  // 시간단위 원격 지원 중 = 불가
   if (title.includes(URGENT_TAG)) return 'urgent';              // 가능태그 + [긴급] = 주의
   return 'available';                                            // 하루종일이어도 가능태그면 가능
