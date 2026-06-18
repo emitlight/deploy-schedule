@@ -55,7 +55,7 @@ export default {
               <tr><td style="padding:4px 12px 4px 0;color:#666">시간</td><td>${startTime || '-'} ~ ${endTime || '-'}</td></tr>
               ${note ? `<tr><td style="padding:4px 12px 4px 0;color:#666">메모</td><td>${note}</td></tr>` : ''}
             </table>
-            <p>일정 확인 후 문의사항은 이하영(hayoung.lee@softcamp.co.kr)에게 연락해 주세요.</p>
+            <p>일정 확인 후 문의사항은 파트너프로그램팀(ps2@softcamp.co.kr)에게 연락해 주세요.</p>
             <p style="color:#888;font-size:12px">본 메일은 배포지원 투입관리 시스템에서 자동 발송되었습니다.</p>
           `;
 
