@@ -597,6 +597,8 @@
     /* 버튼 일부 숨김 (라운드로빈, 빈시간은 유지) */
     .sync-status { display: none; }
     .grid-container { min-width: 720px; }
+    /* 컨테이너와 행 폭 일치 → 마지막 열(김정환) 잘림 방지 (행 min-width 800 → 720) */
+    .grid-header, .allday-row, .timed-slot-row { min-width: 720px; }
 
     /* 시간 컬럼 더 축소 */
     .grid-header { grid-template-columns: 44px repeat(8, minmax(0,1fr)); }
@@ -1760,7 +1762,8 @@ async function syncOutlook() {
     const url = prompt(
       '☁️ Cloudflare Worker URL을 입력하세요\n' +
       '(예: https://my-worker.your-id.workers.dev)\n\n' +
-      '나중에 바꾸려면 이 버튼을 다시 클릭하세요.'
+      '나중에 바꾸려면 이 버튼을 다시 클릭하세요.',
+      'https://deploycalendar.hayoung-lee.workers.dev'
     );
     if (!url) return;
     localStorage.setItem('workerUrl', url.trim());
