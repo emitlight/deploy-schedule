@@ -1951,29 +1951,11 @@ function classifyAvailability(e) {
   const ov = e.id ? tagOverrides[e.id] : null;
   if (ov === 'available' || ov === 'blocking' || ov === 'urgent') return ov;
   const title = normalizeTitle(e.title);
-  // 1. 가능 키워드([티켓][파트너][내부][교육][대기]) 있으면 가능 ([내부/LMS]·[파트너/아이티윈] 포함)
-  if (titleHasAvailableTag(title)) {
-    if (!e.isAllDay && title.includes('원격')) return 'blocking';  // 시간단위 원격 지원 중 = 불가
-    if (title.includes(URGENT_TAG)) return 'urgent';              // 가능태그 + [긴급] = 주의
-    return 'available';
-  }
-  // 2. 명확히 빼면 안 되는 일(휴가·외근·출장·OOF·[고객사]·고객사명 브라켓) = 불가
-  if (isBlockingEvent(e, title)) return 'blocking';
-  // 3. 그 외(무태그·[무솔]·[LMS] 등 미인식) = 가능 (관대 — 풀 넓혀 공정성↑)
+  // 가능 키워드([티켓][파트너][내부][교육][대기], [내부/LMS]처럼 슬래시 양쪽 포함) 있으면 가능
+  if (!titleHasAvailableTag(title)) return 'blocking';          // 무태그·고객사명·휴가 등 = 불가 (가능한 건 일정 클릭→수동 '가능'으로)
+  if (!e.isAllDay && title.includes('원격')) return 'blocking';  // 시간단위 원격 지원 중 = 불가
+  if (title.includes(URGENT_TAG)) return 'urgent';              // 가능태그 + [긴급] = 주의
   return 'available';
-}
-
-// 명확한 '불가' 신호 판별: 휴가/외근/출장/OOF, [고객사]/[외근]/[출장], 고객사명 브라켓
-const OUT_KEYWORDS    = ['연차','반차','휴가','외근','출장','재택','공휴일','경조','병가','조퇴','OOF','부재중'];
-const BLOCK_TAGS      = ['[고객사]','[외근]','[출장]'];
-const CUSTOMER_NAMES  = ['매그나칩','삼성카드','하나생명','kb라이프','신한카드','한화생명','기아','국가정보자원관리원','한국산업','한국항공우주','pt itpro','itpro','지란지교','커넥스','아이티윈','일본법인','포스텍','울산도시공사','cybershield','유아이헬리콥터','부산백병원'];
-const CUSTOMER_SUFFIX = /(생명|카드|은행|보험|화재|증권|산업|진흥원|관리원|법인|공사|대학|병원|반도체|데이터|건설|전자|화학|항공|그룹|통신)/;
-function isBlockingEvent(e, title) {
-  if (e.type === 'out') return true;                              // worker가 휴가/외근/OOF로 분류
-  if (OUT_KEYWORDS.some(k => title.includes(k))) return true;     // 휴가/외근/출장 등 키워드
-  if (BLOCK_TAGS.some(t => title.includes(t))) return true;       // [고객사]/[외근]/[출장]
-  const tags = (title.match(/\[([^\]]+)\]/g) || []).map(s => s.slice(1, -1).toLowerCase());
-  return tags.some(t => CUSTOMER_NAMES.some(c => t.includes(c)) || CUSTOMER_SUFFIX.test(t));  // 고객사명 브라켓
 }
 
 function isFreeTimeEvent(e) {
