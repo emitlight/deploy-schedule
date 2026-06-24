@@ -1840,9 +1840,18 @@ document.addEventListener('click', e => {
     closeCalendar();
   }
 });
-document.getElementById('eventModal').addEventListener('click', function(e) { if(e.target===this)closeModal(); });
-document.getElementById('deployModal').addEventListener('click', function(e) { if(e.target===this)closeDeployModal(); });
-document.getElementById('rouletteModal').addEventListener('click', function(e) { if(e.target===this)closeRoulette(); });
+// 오버레이(모달 바깥) 클릭 시 닫기 — 단, 모달 내부에서 시작한 드래그(긴 제목 선택 등)가
+// 오버레이에서 끝나는 경우는 닫지 않음. mousedown이 오버레이에서 시작했을 때만 닫는다.
+function closeOnOverlayClick(overlayId, closeFn) {
+  const ov = document.getElementById(overlayId);
+  if (!ov) return;
+  let downOnOverlay = false;
+  ov.addEventListener('mousedown', e => { downOnOverlay = (e.target === ov); });
+  ov.addEventListener('click',     e => { if (e.target === ov && downOnOverlay) closeFn(); });
+}
+closeOnOverlayClick('eventModal',    closeModal);
+closeOnOverlayClick('deployModal',   closeDeployModal);
+closeOnOverlayClick('rouletteModal', closeRoulette);
 
 // ─── Roulette (Round-Robin) ───────────────────────────────────────────────
 const WHEEL_COLORS = ['#5c6bc0','#e53935','#43a047','#fb8c00','#8e24aa'];
@@ -2643,12 +2652,8 @@ function closeGuideModal() {
 function openTagModal()  { document.getElementById('tagModal').classList.add('open'); }
 function closeTagModal() { document.getElementById('tagModal').classList.remove('open'); }
 document.addEventListener('DOMContentLoaded', () => {
-  document.getElementById('guideModal')?.addEventListener('click', function(e) {
-    if (e.target === this) closeGuideModal();
-  });
-  document.getElementById('tagModal')?.addEventListener('click', function(e) {
-    if (e.target === this) closeTagModal();
-  });
+  closeOnOverlayClick('guideModal', closeGuideModal);
+  closeOnOverlayClick('tagModal', closeTagModal);
 });
 
 </script>
