@@ -2001,7 +2001,7 @@ async function loadRrOrderFromNotion() {
 }
 
 // ── 배포지원 가용 여부 판별 (태그 화이트리스트 + 수동 오버라이드) ──────────────
-// 규칙: "빼도 되는 업무" 태그가 있으면 가능, 그 외(무태그·고객사명·휴가 등)는 불가.
+// 규칙: 가능 키워드([티켓] 등) 있으면 가능 / 부재(휴가·외근 등)·가능키워드없는[태그]는 불가 / 태그없는 회의는 가능.
 //  - 하루종일이어도 가능태그([티켓]/[내부] 등)면 배포 가능
 //  - 시간단위 + '원격' = 불가 (원격 지원 중)
 //  - 가능태그 + [긴급] = 풀엔 포함하되 ⚠️ 주의 (매니저 판단)
@@ -2042,30 +2042,24 @@ function classifyAvailability(e) {
   const ov = e.id ? tagOverrides[e.id] : null;
   if (ov === 'available' || ov === 'blocking' || ov === 'urgent') return ov;
   const title = normalizeTitle(e.title);
-  // 1. 가능 키워드([티켓][파트너][내부][교육][대기], [내부/LMS] 포함) 있으면 가능
+  // 3. 가능 키워드([티켓][파트너][내부][교육][대기], [내부/LMS]처럼 슬래시·언더바 토큰 포함) 있으면 가능
   if (titleHasAvailableTag(title)) {
     if (!e.isAllDay && title.includes('원격')) return 'blocking';  // 시간단위 원격 지원 중 = 불가
     if (title.includes(URGENT_TAG)) return 'urgent';              // 가능태그 + [긴급] = 주의
     return 'available';
   }
-  // 2. 명확히 빼면 안 되는 일(휴가·외근·출장·OOF, [고객사]/[외근]/[출장], 고객사명) = 불가
-  if (isBlockingEvent(e, title)) return 'blocking';
-  // 3. 그 외(회의·미팅·무태그·[무솔]·[LMS] 등) = 가능 — [외근]/[고객사] 없으면 배포 가능
+  // 4. 휴가·연차·외근·출장·OOF 등 부재 = 불가
+  if (e.type === 'out' || OUT_KEYWORDS.some(k => title.includes(k))) return 'blocking';
+  // 5. 가능 키워드 없는 [태그](고객사명·전담업무 등)가 하나라도 있으면 = 불가
+  //    → 고객사 이름 목록을 관리하지 않고 "가능 키워드 없는 대괄호 태그"는 모두 불가로 일관 처리
+  //      (예: [현대얼터너티브] [국민카드] [매그나칩반도체] [고객사] → 전부 불가)
+  if (/\[[^\]]+\]/.test(title)) return 'blocking';
+  // 6. 대괄호 태그가 전혀 없는 순수 일정(회의·미팅 등) = 가능
   return 'available';
 }
 
-// 명확한 '불가' 신호: 휴가/외근/출장/OOF, [고객사]/[외근]/[출장] 태그, 고객사명 브라켓
-const OUT_KEYWORDS    = ['연차','반차','휴가','외근','출장','재택','공휴일','경조','병가','조퇴','OOF','부재중'];
-const BLOCK_TAGS      = ['[고객사]','[외근]','[출장]'];
-const CUSTOMER_NAMES  = ['매그나칩','삼성카드','하나생명','kb라이프','신한카드','한화생명','기아','국가정보자원관리원','한국산업','한국항공우주','pt itpro','itpro','지란지교','커넥스','아이티윈','일본법인','포스텍','울산도시공사','cybershield','유아이헬리콥터','부산백병원'];
-const CUSTOMER_SUFFIX = /(생명|카드|은행|보험|화재|증권|산업|진흥원|관리원|법인|공사|대학|병원|반도체|데이터|건설|전자|화학|항공|그룹|통신)/;
-function isBlockingEvent(e, title) {
-  if (e.type === 'out') return true;                              // worker가 휴가/외근/출장/OOF로 분류
-  if (OUT_KEYWORDS.some(k => title.includes(k))) return true;
-  if (BLOCK_TAGS.some(t => title.includes(t))) return true;       // [고객사]/[외근]/[출장]
-  const tags = (title.match(/\[([^\]]+)\]/g) || []).map(s => s.slice(1, -1).toLowerCase());
-  return tags.some(t => CUSTOMER_NAMES.some(c => t.includes(c)) || CUSTOMER_SUFFIX.test(t));  // 고객사명 브라켓
-}
+// 부재(불가) 키워드 — 휴가/외근/출장/OOF 등 (가능 키워드가 없을 때만 검사)
+const OUT_KEYWORDS = ['연차','반차','휴가','외근','출장','재택','공휴일','경조','병가','조퇴','OOF','부재중'];
 
 function isFreeTimeEvent(e) {
   const c = classifyAvailability(e);
@@ -2808,7 +2802,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <tr><td style="padding:3px 6px;"><b>[외근]·[출장]</b></td><td>외근·출장</td><td style="color:#777;">[외근] 고객 미팅</td></tr>
             <tr><td style="padding:3px 6px;">연차·반차·휴가</td><td>휴가류(태그 없어도 인식)</td><td style="color:#777;">연차 / 반차</td></tr>
           </table>
-          <div style="font-size:12px;color:#1565c0;margin-top:6px;">※ <b>회의·미팅·태그 없는 일정은 기본 '가능'</b>으로 봅니다. <b>빼면 안 되는 일</b>은 반드시 위 🔴태그(<b>[고객사]·[외근]·[출장]</b>)나 휴가로 표시해 주세요.</div>
+          <div style="font-size:12px;color:#1565c0;margin-top:6px;">※ <b>회의·미팅·태그 없는 일정은 기본 '가능'</b>. 단 대괄호 <b>[태그]</b>를 쓸 거면 <b>반드시 가능 키워드([티켓]·[내부] 등)</b>를 넣으세요 — 가능 키워드 없는 <b>[고객사명]·[프로젝트명]</b> 태그는 자동 '불가'입니다.</div>
         </div>
         <div style="background:#fff8e1;border:1px solid #ffe082;border-radius:8px;padding:10px 12px;margin-bottom:10px;">
           <div style="font-weight:700;color:#f57f17;margin-bottom:6px;">⚠️ 긴급 (가능 업무지만 빼지 말아주세요)</div>
@@ -2819,7 +2813,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <ul style="margin:0;padding-left:18px;font-size:13px;line-height:1.6;">
             <li><b>하루종일</b> 일정이어도 [티켓]·[내부] 등 가능 태그면 <b>배포지원 가능</b>으로 잡힙니다.</li>
             <li><b>태그 형식은 유연합니다</b> — <code>[티켓]</code>·<code>[티켓] OO사</code>·<code>[티켓_OO사]</code>·<code>[완료/티켓]</code> 모두 인식(대괄호 안이 가능 키워드로 시작하면 OK).</li>
-            <li>고객사명([기아]·[신한카드] 등)을 직접 쓰면 자동으로 '불가' 처리됩니다.</li>
+            <li><b>가능 키워드 없는 모든 [태그]는 '불가'</b> — 고객사명([기아]·[국민카드])·프로젝트명 등 <code>[티켓]·[내부]</code> 같은 가능 키워드가 없는 대괄호 태그는 전담 업무로 보고 제외합니다.</li>
             <li>매니저는 각 일정을 클릭해 <b>배포지원 분류를 수동 조정</b>할 수 있습니다.</li>
           </ul>
         </div>
