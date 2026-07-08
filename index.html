@@ -1255,12 +1255,34 @@ function renderGrid() {
       e.memberId===m.id && e.date===dateStr && !e.isAllDay
     );
     html += `<div class="member-events-col">`;
-    timedEvs.forEach(ev => {
-      const evStartMin = timeToMin(ev.startTime || '09:00');
-      const evEndMin   = timeToMin(ev.endTime   || '09:30');
-      // 그리드 범위(09:00~20:00) 완전히 벗어나면 스킵
-      if (evEndMin <= FIRST_MIN || evStartMin >= GRID_END_MIN) return;
 
+    // 그리드에 보이는 이벤트만 추려 시간 계산 후 시작시간순 정렬
+    const vis = timedEvs.map(ev => ({
+      ev,
+      s: timeToMin(ev.startTime || '09:00'),
+      e: timeToMin(ev.endTime   || '09:30'),
+    })).filter(o => o.e > FIRST_MIN && o.s < GRID_END_MIN)
+       .sort((a, b) => a.s - b.s || a.e - b.e);
+
+    // 같은 시간대에 겹치는 이벤트는 좌우로 나눠 배치 (구글 캘린더식) — 클러스터별 컬럼 할당
+    let cluster = [], clusterEnd = -Infinity;
+    const assignCols = () => {
+      const colEnds = [];
+      cluster.forEach(o => {
+        let c = 0;
+        while (c < colEnds.length && o.s < colEnds[c]) c++;  // 겹치면 다음 칸으로
+        o.col = c; colEnds[c] = o.e;
+      });
+      cluster.forEach(o => o.cols = colEnds.length);  // 클러스터 내 폭 통일
+      cluster = [];
+    };
+    vis.forEach(o => {
+      if (cluster.length && o.s >= clusterEnd) { assignCols(); clusterEnd = -Infinity; }
+      cluster.push(o); clusterEnd = Math.max(clusterEnd, o.e);
+    });
+    assignCols();
+
+    vis.forEach(({ ev, s: evStartMin, e: evEndMin, col, cols }) => {
       const cls       = TYPE_CLS[ev.type] || 'event-other';
       const isOutlook = !!ev.fromOutlook;
 
@@ -1278,8 +1300,12 @@ function renderGrid() {
       const clippedTop = evStartMin < FIRST_MIN;   // 09:00 이전 시작
       const clippedBot = evEndMin   > GRID_END_MIN; // 20:00 이후 종료
 
+      // 겹침 좌우 분할: cols개로 나눠 col번째 칸에 배치 (CSS의 left:3/right:3 을 인라인으로 override)
+      const leftCss  = `calc(${((col / cols) * 100).toFixed(4)}% + 3px)`;
+      const widthCss = `calc(${((1 / cols) * 100).toFixed(4)}% - 6px)`;
+
       html += `<div class="timed-event-block ${cls}${isOutlook?' from-outlook':''}"
-        style="top:${top}px; height:${height}px;"
+        style="top:${top}px; height:${height}px; left:${leftCss}; width:${widthCss}; right:auto;"
         onclick="editEvent(event,${events.indexOf(ev)})"
         title="${ev.title}${ev.note?'\n'+ev.note:''}${isOutlook?'\n[아웃룩 연동]':''}">
         <span class="event-time">${clippedTop?'◀':''} ${timeLabel} ${clippedBot?'▶':''}${isOutlook?'<span class="outlook-badge">OL</span>':''}</span>
