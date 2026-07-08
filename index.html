@@ -1055,7 +1055,7 @@ const MEMBERS = [
   { id: 8, name: '김정환', email: 'junghwan.kim@softcamp.co.kr',  team: 'Partner Online Platform팀', dept: 'Partner Platform부' },
 ];
 
-const HOURS     = ['09:00','09:30','10:00','10:30','11:00','11:30','12:00','12:30',
+const HOURS     = ['08:00','08:30','09:00','09:30','10:00','10:30','11:00','11:30','12:00','12:30',
                     '13:00','13:30','14:00','14:30','15:00','15:30','16:00','16:30',
                     '17:00','17:30','18:00','18:30','19:00','19:30','20:00'];
 const DAY_NAMES = ['월','화','수','목','금'];
@@ -1153,7 +1153,7 @@ function renderGrid() {
   const vw = window.innerWidth;
   const ROW_FULL = vw <= 600 ? 34 : vw <= 900 ? 38 : 44;
   const ROW_HALF = vw <= 600 ? 28 : vw <= 900 ? 32 : 38;
-  const FIRST_MIN = 9 * 60; // 09:00 = 540분
+  const FIRST_MIN = 8 * 60; // 08:00 = 480분
 
   function timeToMin(t) {
     if (!t) return FIRST_MIN;
