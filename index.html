@@ -596,9 +596,9 @@
     .header-left h1 { font-size: 13px; }
     /* 버튼 일부 숨김 (라운드로빈, 빈시간은 유지) */
     .sync-status { display: none; }
-    .grid-container { min-width: 720px; }
+    .grid-container { min-width: 780px; }
     /* 컨테이너와 행 폭 일치 → 마지막 열(김정환) 잘림 방지 (행 min-width 800 → 720) */
-    .grid-header, .allday-row, .timed-slot-row { min-width: 720px; }
+    .grid-header, .allday-row, .timed-slot-row { min-width: 780px; }
 
     /* 시간 컬럼 더 축소 */
     .grid-header { grid-template-columns: 44px repeat(8, minmax(0,1fr)); }
@@ -872,19 +872,23 @@
       <label>배포지원 내용</label>
       <input type="text" id="dTitle" placeholder="배포지원 요청 티켓 ID, 고객사명, 프로젝트명 (예: TT119590 A사 클라우드 배포)" />
     </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>배포 날짜</label>
-        <input type="date" id="dDate" onchange="checkDeployConflict()" />
+    <div class="form-group">
+      <label>배포 기간 <span style="color:#999;font-weight:400;font-size:11px;">(하루면 종료일 비워도 됨 · 여러 날이면 가능한 날마다 등록)</span></label>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <input type="date" id="dDate" onchange="syncDeployEndDate(); checkDeployConflict()" style="flex:1;min-width:0;" />
+        <span style="color:#aaa;">~</span>
+        <input type="date" id="dEndDate" onchange="checkDeployConflict()" style="flex:1;min-width:0;" />
       </div>
+    </div>
+    <div class="form-row">
       <div class="form-group">
         <label>시작 시간</label>
         <select id="dStart" onchange="checkDeployConflict()"></select>
       </div>
-    </div>
-    <div class="form-group">
-      <label>종료 시간</label>
-      <select id="dEnd" onchange="checkDeployConflict()"></select>
+      <div class="form-group">
+        <label>종료 시간</label>
+        <select id="dEnd" onchange="checkDeployConflict()"></select>
+      </div>
     </div>
     <!-- 일정 충돌 경고 -->
     <div class="conflict-warning" id="deployConflict">
@@ -1017,6 +1021,27 @@
 // ─── Cloudflare Worker 설정 ──────────────────────────────────────────────────
 // ✏️ Cloudflare Worker 배포 후 아래 URL을 교체하세요
 const WORKER_URL = localStorage.getItem('workerUrl') || '';
+
+// ── Worker 호출 보안: 접근 비밀번호(X-Auth) 자동 첨부 + 401 시 재입력 ──
+// Worker에 APP_PASSWORD를 설정한 경우에만 서버가 검사함 → 미설정이면 동작 변화 없음(안전).
+(function () {
+  const _origFetch = window.fetch.bind(window);
+  window.fetch = async function (input, init) {
+    const u = (typeof input === 'string') ? input : (input && input.url) || '';
+    const isWorker = WORKER_URL && u && u.indexOf(WORKER_URL) === 0;
+    if (isWorker) {
+      init = init || {};
+      const pw = localStorage.getItem('appPassword');
+      if (pw) init.headers = Object.assign({}, init.headers, { 'X-Auth': pw });
+    }
+    const res = await _origFetch(input, init);
+    if (isWorker && res.status === 401) {
+      const pw = prompt('🔑 이 대시보드 접근 비밀번호를 입력하세요 (관리자에게 문의)');
+      if (pw) { localStorage.setItem('appPassword', pw); location.reload(); }
+    }
+    return res;
+  };
+})();
 
 // ─── Data ───────────────────────────────────────────────────────────────────
 const MEMBERS = [
@@ -1428,7 +1453,7 @@ function saveEvent() {
   const end   = document.getElementById('fEnd').value;
   if (timeToMinutes(start) >= timeToMinutes(end)) { showToast('종료 시간은 시작 시간보다 늦어야 합니다'); return; }
   const ev = {
-    id:        editingId || `ev_${Date.now()}`,
+    id:        editingId || `ev_${Date.now()}_${Math.random().toString(36).slice(2,8)}`,
     memberId:  parseInt(document.getElementById('fMember').value),
     date:      addContext ? addContext.date : selectedDate(),
     title, type: document.getElementById('fType').value,
@@ -1494,6 +1519,7 @@ function saveEvent() {
 }
 function deleteEvent() {
   if (!editingId) return;
+  if (!confirm('이 일정을 삭제할까요? 되돌릴 수 없습니다.')) return;
   const target = events.find(x => x.id === editingId);
   events = events.filter(x => x.id !== editingId);
   saveData(); closeModal(); render(); showToast('일정이 삭제되었습니다');
@@ -1519,6 +1545,7 @@ function openDeployModal() {
   populateTimeSelect('dStart','09:00');
   populateTimeSelect('dEnd','18:00');
   document.getElementById('dDate').value = selectedDate();
+  document.getElementById('dEndDate').value = selectedDate();
   document.getElementById('dTitle').value = '';
   // CRM 섹션 초기화
   document.getElementById('deployCrmSection').classList.add('visible');
@@ -1528,35 +1555,70 @@ function openDeployModal() {
   document.getElementById('deployModal').classList.add('open');
 }
 function closeDeployModal() { document.getElementById('deployModal').classList.remove('open'); }
+// 시작일 변경 시 종료일이 비었거나 시작일보다 앞서면 시작일로 맞춤
+function syncDeployEndDate() {
+  const s = document.getElementById('dDate').value;
+  const eEl = document.getElementById('dEndDate');
+  if (s && (!eEl.value || eEl.value < s)) eEl.value = s;
+}
 function saveDeployEvent() {
   const memberId = parseInt(document.getElementById('dMember').value);
   const title    = document.getElementById('dTitle').value.trim();
   const date     = document.getElementById('dDate').value;
+  const endDate  = document.getElementById('dEndDate').value || date;
   const start    = document.getElementById('dStart').value;
   const end      = document.getElementById('dEnd').value;
   if (!memberId) { showToast('멤버를 선택해 주세요'); return; }
   if (!title)    { showToast('배포지원 내용을 입력해 주세요'); return; }
   if (!date)     { showToast('날짜를 선택해 주세요'); return; }
+  if (endDate < date) { showToast('종료일은 시작일보다 빠를 수 없습니다'); return; }
   if (timeToMinutes(start)>=timeToMinutes(end)) { showToast('종료 시간은 시작 시간보다 늦어야 합니다'); return; }
-  const deployEv = { id:`ev_${Date.now()}`, memberId, date, title, type:'deploy', startTime:start, endTime:end, note:'', spinLogPageId: lastSpinLogPageId || null };
-  events.push(deployEv);
+
+  // 기간(여러 날)이면 그 기간 중 '가능한 평일'마다 배포 이벤트 생성. 하루면 그 하루만.
+  let days = (endDate > date)
+    ? getAvailableDates(memberId, date, endDate, start, end)
+    : [date];
+  if (days.length === 0) days = [date];  // 안전장치: 가능한 날이 없어도 시작일엔 등록
+
+  const uid = `${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+  const created = days.map((d, i) => {
+    const ev = { id:`ev_${uid}_${i}`, memberId, date:d, title, type:'deploy',
+                 startTime:start, endTime:end, note:'',
+                 spinLogPageId: (i === 0 ? (lastSpinLogPageId || null) : null) };
+    events.push(ev);
+    return ev;
+  });
   saveData();
   selectedDay = new Date(date+'T00:00:00');
   currentWeekStart = getMonday(selectedDay);
   closeDeployModal(); render();
-  const memberName = MEMBERS.find(x=>x.id===memberId)?.name;
-  showToast(`${memberName} 배포지원 일정이 투입되었습니다 🚀`);
 
-  // Notion 저장 (비동기)
-  saveEventToNotion(deployEv).then(saved => {
-    if (saved.pageId) {
-      const idx = events.findIndex(x => x.id === deployEv.id);
-      if (idx !== -1) { events[idx].pageId = saved.pageId; saveDataLocal(); }
-    }
+  const memberName = MEMBERS.find(x=>x.id===memberId)?.name;
+  const rangeLabel = days.length > 1 ? `${days[0]} ~ ${days[days.length-1]} (${days.length}일)` : days[0];
+  showToast(`${memberName} 배포지원 일정이 투입되었습니다 🚀 (${rangeLabel})`);
+
+  // Notion 저장 (날짜별 각각 비동기)
+  created.forEach(ev => {
+    saveEventToNotion(ev).then(saved => {
+      if (saved.pageId) {
+        const idx = events.findIndex(x => x.id === ev.id);
+        if (idx !== -1) { events[idx].pageId = saved.pageId; saveDataLocal(); }
+      }
+    });
   });
 
-  // 배포 담당자에게 메일 클라이언트 열기
-  openMailtoLink(memberName, date, start, end, title);
+  // add-spinlog 응답이 늦게 오면 첫 이벤트에 spinLogPageId 소급 반영 (배포 취소 시 우선순위 복구용)
+  if (!created[0].spinLogPageId && spinLogPromise) {
+    spinLogPromise.then(id => {
+      if (id) {
+        const i = events.findIndex(x => x.id === created[0].id);
+        if (i !== -1) { events[i].spinLogPageId = id; saveDataLocal(); }
+      }
+    });
+  }
+
+  // 배포 담당자에게 메일 클라이언트 열기 (기간 표기)
+  openMailtoLink(memberName, rangeLabel, start, end, title);
 }
 
 // ── 배포 담당자에게 메일 클라이언트 열기 (mailto) ──────────────────────
@@ -1582,7 +1644,9 @@ function openMailtoLink(memberName, date, startTime, endTime, title, note = '') 
   const body = lines.join('\n');
 
   const mailto = `mailto:${toEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-  window.open(mailto, '_blank');
+  const w = window.open(mailto, '_blank');
+  // 팝업 차단·기본 메일앱 미설정이면 창이 안 열림 → 운영자에게 알려 수동 안내 유도
+  if (!w) showToast(`✉️ 메일 창이 안 열렸습니다 — ${memberName}(${toEmail})에게 직접 안내해 주세요`);
 }
 
 // ─── Calendar Popup ───────────────────────────────────────────────────────
@@ -1862,6 +1926,7 @@ let wheelSlices  = [];
 let lastWinner      = null;
 let currentWinner   = null;  // 이번 모달 세션 잠금 당첨자 (배정 확정 전까지 고정)
 let lastSpinLogPageId = null;  // 마지막 스핀의 Notion pageId (배포 취소 시 삭제용)
+let spinLogPromise    = null;  // add-spinlog 요청 Promise (pageId 소급 반영·경쟁 조건 대비)
 
 // ── 라운드로빈 순서 관리 ──────────────────────────────────────────────────
 // 앞쪽 = 다음 차례(가장 오래 안 뽑힌), 뒤쪽 = 최근 선정
@@ -1986,7 +2051,7 @@ function memberHasUrgentInRange(memberId, startDate, endDate, startTime, endTime
   const dates = getDateRange(startDate, endDate);
   return events.some(e =>
     e.memberId === memberId && dates.includes(e.date) &&
-    eventsOverlap(startTime, endTime, e.startTime || '09:00', e.endTime || '18:00') &&
+    (e.isAllDay || eventsOverlap(startTime, endTime, e.startTime || '09:00', e.endTime || '18:00')) &&
     classifyAvailability(e) === 'urgent'
   );
 }
@@ -1994,7 +2059,7 @@ function memberHasUrgentInRange(memberId, startDate, endDate, startTime, endTime
 function isMemberAvailable(memberId, dateStr, startTime, endTime) {
   return !events.some(e =>
     e.memberId === memberId && e.date === dateStr &&
-    eventsOverlap(startTime, endTime, e.startTime, e.endTime) &&
+    (e.isAllDay || eventsOverlap(startTime, endTime, e.startTime, e.endTime)) &&  // 종일 일정은 시간 무관 하루 전체
     !isFreeTimeEvent(e)
   );
 }
@@ -2366,9 +2431,10 @@ function assignFromWheel() {
   advanceRrOrder(confirmed.id);
 
   lastSpinLogPageId = null;
+  spinLogPromise = null;
   if (WORKER_URL) {
     const spunAt = new Date().toLocaleString('ko-KR');
-    fetch(WORKER_URL, {
+    spinLogPromise = fetch(WORKER_URL, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json', 'X-Action': 'add-spinlog' },
       body: JSON.stringify({
@@ -2383,8 +2449,8 @@ function assignFromWheel() {
       }),
     })
     .then(r => r.json())
-    .then(d => { if (d.ok && d.pageId) lastSpinLogPageId = d.pageId; })
-    .catch(() => {});
+    .then(d => { if (d.ok && d.pageId) { lastSpinLogPageId = d.pageId; return d.pageId; } return null; })
+    .catch(() => { showToast('⚠️ 배정 기록을 서버에 저장하지 못했습니다 (프록시 확인 후 다시 시도해 주세요)'); return null; });
   }
 
   // 돌림판에서 설정한 배포 시간 가져오기
@@ -2714,7 +2780,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <tr><td style="padding:3px 6px;"><b>[외근]·[출장]</b></td><td>외근·출장</td><td style="color:#777;">[외근] 고객 미팅</td></tr>
             <tr><td style="padding:3px 6px;">연차·반차·휴가</td><td>휴가류(태그 없어도 인식)</td><td style="color:#777;">연차 / 반차</td></tr>
           </table>
-          <div style="font-size:12px;color:#b71c1c;margin-top:6px;">※ <b>태그를 안 달면 '불가'로 처리</b>됩니다(일정이 있다 = 업무 중). 가능한 업무는 꼭 위 태그를 달아주세요.</div>
+          <div style="font-size:12px;color:#1565c0;margin-top:6px;">※ <b>회의·미팅·태그 없는 일정은 기본 '가능'</b>으로 봅니다. <b>빼면 안 되는 일</b>은 반드시 위 🔴태그(<b>[고객사]·[외근]·[출장]</b>)나 휴가로 표시해 주세요.</div>
         </div>
         <div style="background:#fff8e1;border:1px solid #ffe082;border-radius:8px;padding:10px 12px;margin-bottom:10px;">
           <div style="font-weight:700;color:#f57f17;margin-bottom:6px;">⚠️ 긴급 (가능 업무지만 빼지 말아주세요)</div>

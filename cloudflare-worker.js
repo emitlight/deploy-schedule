@@ -15,9 +15,9 @@
  *  0 6 * * *   → KST 15:00   아웃룩 자동 동기화
  */
 const CORS = {
-  'Access-Control-Allow-Origin':  '*',
+  'Access-Control-Allow-Origin':  'https://emitlight.github.io',  // 대시보드 도메인만 허용 (브라우저 교차출처 남용 차단)
   'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, X-Action',
+  'Access-Control-Allow-Headers': 'Content-Type, X-Action, X-Auth',
 };
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 
@@ -25,6 +25,12 @@ export default {
   // ── HTTP 요청 핸들러 ──────────────────────────────────────────────────
   async fetch(request, env) {
     if (request.method === 'OPTIONS') return new Response(null,{status:204,headers:CORS});
+    // 접근 비밀번호 게이트: env.APP_PASSWORD를 설정한 경우에만 검사(미설정이면 통과 → 기존 동작 유지)
+    // ⚠️ 보안 검토 필요: 프론트가 공개(GitHub Pages)이므로 이 토큰은 '캐주얼 차단'용. 완전한 인증은 Cloudflare Access(SSO) 권장.
+    if (env.APP_PASSWORD && request.headers.get('X-Auth') !== env.APP_PASSWORD) {
+      return new Response(JSON.stringify({ ok:false, error:'unauthorized' }),
+        { status:401, headers:{ ...CORS, 'Content-Type':'application/json' } });
+    }
     const url    = new URL(request.url);
     const action = request.headers.get('X-Action') || url.searchParams.get('action');
     const body   = ['POST','PATCH','DELETE'].includes(request.method)
