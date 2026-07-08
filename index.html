@@ -2090,11 +2090,12 @@ function isMemberAvailable(memberId, dateStr, startTime, endTime) {
   );
 }
 
-// 기간 전체에 걸쳐 하루라도 가능한 날이 있으면 true
+// 기간 내 '모든 평일'이 가능해야 true (여러 날 배포는 전 기간 참여해야 하므로)
 function isMemberAvailableInRange(memberId, startDate, endDate, startTime, endTime) {
   const dates = getDateRange(startDate, endDate);
-  // 기간 중 하루라도 가능한 날이 있으면 투입 가능
-  return dates.some(d => isMemberAvailable(memberId, d, startTime, endTime));
+  if (dates.length === 0) return false;  // 평일 없는 기간(주말만 등) → 대상 아님
+  // 기간 내 모든 날이 가능해야 투입 가능
+  return dates.every(d => isMemberAvailable(memberId, d, startTime, endTime));
 }
 
 // 기간 내 가능한 날짜 목록 반환
@@ -2486,7 +2487,8 @@ function assignFromWheel() {
   populateMemberSelect('dMember', confirmed.id);
   populateTimeSelect('dStart', depStart);
   populateTimeSelect('dEnd',   depEnd);
-  document.getElementById('dDate').value  = document.getElementById('rDepDateStart')?.value || selectedDate();
+  document.getElementById('dDate').value    = document.getElementById('rDepDateStart')?.value || selectedDate();
+  document.getElementById('dEndDate').value = document.getElementById('rDepDateEnd')?.value   || document.getElementById('dDate').value;
   document.getElementById('dTitle').value = '배포지원';
   checkDeployConflict();
   // CRM 섹션에 당첨자 이름 설정
