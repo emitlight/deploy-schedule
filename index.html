@@ -1946,6 +1946,13 @@ closeOnOverlayClick('rouletteModal', closeRoulette);
 // ─── Roulette (Round-Robin) ───────────────────────────────────────────────
 const WHEEL_COLORS = ['#5c6bc0','#e53935','#43a047','#fb8c00','#8e24aa'];
 let pickHistory  = JSON.parse(localStorage.getItem('pickHistory') || '[]');
+
+// 돌림판에서 설정한 배포 기간 {시작, 끝, 표시라벨} — 스핀이력·초기화 기록에 공통 사용
+function getDepRange() {
+  const ds = document.getElementById('rDepDateStart')?.value || selectedDate();
+  const de = document.getElementById('rDepDateEnd')?.value   || ds;
+  return { ds, de, label: ds === de ? ds : `${ds}~${de}` };
+}
 let spinning     = false;
 let wheelRot     = 0;
 let wheelSlices  = [];
@@ -2208,16 +2215,16 @@ function resetPendingWinner() {
     fetch(WORKER_URL, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json', 'X-Action': 'add-resetlog' },
-      body: JSON.stringify({
-        name:        pw.name,
-        memberId:    pw.id,
-        targetDate:  (() => {
-          const ds = document.getElementById('rDepDateStart')?.value || selectedDate();
-          const de = document.getElementById('rDepDateEnd')?.value   || ds;
-          return ds === de ? ds : `${ds}~${de}`;
-        })(),
-        resetAt: new Date().toLocaleString('ko-KR'),
-      }),
+      body: (() => {
+        const r = getDepRange();
+        const resetAt = new Date().toLocaleString('ko-KR');
+        return JSON.stringify({
+          name:        pw.name,
+          memberId:    pw.id,
+          targetDate:  r.ds,                                                     // 유효한 시작일만
+          resetAt:     r.ds === r.de ? resetAt : `${resetAt} · 기간 ${r.label}`, // 여러 날이면 기간 기록
+        });
+      })(),
     }).catch(() => {});
   }
   document.getElementById('resultBanner').className = 'result-banner';
@@ -2386,7 +2393,7 @@ function spinWheel() {
       pickHistory.unshift({
         name:       winner.name,
         team:       winner.team,
-        targetDate: selectedDate(),
+        targetDate: getDepRange().label,   // 배포 기간(단일이면 그 날, 여러 날이면 시작~끝)
         spunAt,
       });
       if (pickHistory.length > 100) pickHistory.pop();
@@ -2458,16 +2465,15 @@ function assignFromWheel() {
     spinLogPromise = fetch(WORKER_URL, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json', 'X-Action': 'add-spinlog' },
-      body: JSON.stringify({
-        name:       confirmed.name,
-        memberId:   confirmed.id,
-        targetDate: (() => {
-          const ds = document.getElementById('rDepDateStart')?.value || selectedDate();
-          const de = document.getElementById('rDepDateEnd')?.value   || ds;
-          return ds === de ? ds : `${ds}~${de}`;
-        })(),
-        spunAt,
-      }),
+      body: (() => {
+        const r = getDepRange();
+        return JSON.stringify({
+          name:       confirmed.name,
+          memberId:   confirmed.id,
+          targetDate: r.ds,                                                    // Notion 날짜(date)엔 유효한 시작일만 저장
+          spunAt:     r.ds === r.de ? spunAt : `${spunAt} · 기간 ${r.label}`,  // 여러 날이면 기간을 스핀일 텍스트로 기록
+        });
+      })(),
     })
     .then(r => r.json())
     .then(d => { if (d.ok && d.pageId) { lastSpinLogPageId = d.pageId; return d.pageId; } return null; })
