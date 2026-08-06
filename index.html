@@ -1665,6 +1665,8 @@ function openMailtoLink(memberName, date, startTime, endTime, title, note = '') 
   lines.push('');
   lines.push('일정 확인 후 문의사항은 파트너프로그램팀(ps2@softcamp.co.kr)에게 연락해 주세요.');
   lines.push('');
+  lines.push('감사합니다.');
+  lines.push('');
   lines.push('본 메일은 배포지원 투입관리 시스템에서 자동 생성되었습니다.');
   lines.push('https://emitlight.github.io/deploy-schedule/');
   const body = lines.join('\n');
@@ -2394,6 +2396,8 @@ function spinWheel() {
         name:       winner.name,
         team:       winner.team,
         targetDate: getDepRange().label,   // 배포 기간(단일이면 그 날, 여러 날이면 시작~끝)
+        depStart:   document.getElementById('rDepStart')?.value || '09:00',
+        depEnd:     document.getElementById('rDepEnd')?.value   || '18:00',
         spunAt,
       });
       if (pickHistory.length > 100) pickHistory.pop();
@@ -2422,13 +2426,23 @@ function renderHistory() {
     tbody.innerHTML = '<tr><td colspan="3" class="history-empty">아직 선정 이력이 없습니다</td></tr>';
     return;
   }
-  tbody.innerHTML = pickHistory.map(h => `
+  tbody.innerHTML = pickHistory.map((h, i) => `
     <tr>
       <td>${h.spunAt || ''}</td>
       <td>${h.targetDate || ''}</td>
-      <td class="history-winner">${h.name}</td>
+      <td class="history-winner">${h.name}
+        <button onclick="sendHistoryMail(${i})" title="이 선정 건으로 담당자에게 배정 메일 작성"
+          style="margin-left:6px;padding:2px 7px;font-size:11px;border:1px solid #c5cae9;border-radius:5px;background:#fff;color:#3949ab;cursor:pointer;vertical-align:middle;">✉️ 메일</button>
+      </td>
     </tr>
   `).join('');
+}
+
+// 스핀 이력에서 기본 배정 메일 다시 작성 (룰렛 화면이 초기화돼도 이력으로 재발송)
+function sendHistoryMail(idx) {
+  const h = pickHistory[idx];
+  if (!h) return;
+  openMailtoLink(h.name, h.targetDate || '', h.depStart || '09:00', h.depEnd || '18:00', '배포지원', '');
 }
 
 function resetPickHistory() {
