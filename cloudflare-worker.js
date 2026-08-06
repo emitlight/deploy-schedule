@@ -470,6 +470,12 @@ async function syncOutlook(env, startDate, endDate) {
   const token        = await getGraphToken(env);
   const memberEmails = JSON.parse(env.MEMBER_EMAILS||'{}');
   const memberIds    = JSON.parse(env.MEMBER_IDS||'{}');
+  // 추가 후보 3명 (ID 9·10·11) — env에 없어도 하드코딩으로 동기화에 포함
+  const EXTRA = { '문병린': ['brmun@softcamp.co.kr', 9], '문정일': ['jungil.moon@softcamp.co.kr', 10], '양창호': ['chh.yang@softcamp.co.kr', 11] };
+  for (const [nm, [em, eid]] of Object.entries(EXTRA)) {
+    if (!memberEmails[nm]) memberEmails[nm] = em;
+    if (!memberIds[nm])    memberIds[nm]    = eid;
+  }
   const allEvents    = [];
   for (const [name,email] of Object.entries(memberEmails)) {
     const memberId = memberIds[name];

@@ -189,7 +189,7 @@
   /* column header */
   .grid-header {
     display: grid;
-    grid-template-columns: 64px repeat(8, minmax(0,1fr));
+    grid-template-columns: 64px repeat(var(--ncol,8), minmax(0,1fr));
     background: #f5f5f5; border-bottom: 2px solid #e0e0e0;
   }
   .grid-header-time { padding: 12px 8px; text-align: center; font-size: 11px; color: #999; }
@@ -223,7 +223,7 @@
   .grid-body { position: relative; }
   .time-row {
     display: grid;
-    grid-template-columns: 64px repeat(8, minmax(0,1fr));
+    grid-template-columns: 64px repeat(var(--ncol,8), minmax(0,1fr));
     border-bottom: 1px solid #f0f0f0; min-height: 48px;
   }
   .time-row:last-child { border-bottom: none; }
@@ -281,7 +281,7 @@
   /* ── 하루종일 행 ── */
   .allday-row {
     display: grid;
-    grid-template-columns: 64px repeat(8, minmax(0,1fr));
+    grid-template-columns: 64px repeat(var(--ncol,8), minmax(0,1fr));
     border-bottom: 2px solid #dde1f0;
     background: #f7f8fd;
     min-height: 34px;
@@ -307,7 +307,7 @@
   /* ── 시간 슬롯 행 (배경 그리드) ── */
   .timed-slot-row {
     display: grid;
-    grid-template-columns: 64px repeat(8, minmax(0,1fr));
+    grid-template-columns: 64px repeat(var(--ncol,8), minmax(0,1fr));
     border-bottom: 1px solid #ededf5; /* 정시 하단 */
     height: 44px;
   }
@@ -328,7 +328,7 @@
   /* ── 이벤트 오버레이 (절대 위치) ── */
   .events-overlay {
     position: absolute; top: 0; left: 64px; right: 0; bottom: 0;
-    display: grid; grid-template-columns: repeat(8, minmax(0,1fr));
+    display: grid; grid-template-columns: repeat(var(--ncol,8), minmax(0,1fr));
     pointer-events: none;
   }
   .member-events-col { position: relative; pointer-events: none; }
@@ -568,9 +568,9 @@
     .member-team, .member-dept { font-size: 9px; }
 
     /* 시간 컬럼 */
-    .grid-header { grid-template-columns: 54px repeat(8, minmax(0,1fr)); }
-    .allday-row  { grid-template-columns: 54px repeat(8, minmax(0,1fr)); }
-    .timed-slot-row { grid-template-columns: 54px repeat(8, minmax(0,1fr)); }
+    .grid-header { grid-template-columns: 54px repeat(var(--ncol,8), minmax(0,1fr)); }
+    .allday-row  { grid-template-columns: 54px repeat(var(--ncol,8), minmax(0,1fr)); }
+    .timed-slot-row { grid-template-columns: 54px repeat(var(--ncol,8), minmax(0,1fr)); }
     .events-overlay { left: 54px; }
     .grid-header-time { padding: 8px 4px; }
     .time-label { font-size: 10px; padding: 0 4px; padding-top: 4px; }
@@ -601,9 +601,9 @@
     .grid-header, .allday-row, .timed-slot-row { min-width: 780px; }
 
     /* 시간 컬럼 더 축소 */
-    .grid-header { grid-template-columns: 44px repeat(8, minmax(0,1fr)); }
-    .allday-row  { grid-template-columns: 44px repeat(8, minmax(0,1fr)); }
-    .timed-slot-row { grid-template-columns: 44px repeat(8, minmax(0,1fr)); }
+    .grid-header { grid-template-columns: 44px repeat(var(--ncol,8), minmax(0,1fr)); }
+    .allday-row  { grid-template-columns: 44px repeat(var(--ncol,8), minmax(0,1fr)); }
+    .timed-slot-row { grid-template-columns: 44px repeat(var(--ncol,8), minmax(0,1fr)); }
     .events-overlay { left: 44px; }
     .time-label { font-size: 9px; padding: 0 2px; padding-top: 3px; }
 
@@ -727,6 +727,7 @@
   </div>
   <div class="header-right">
     <button class="btn btn-white" onclick="openRoulette()">🎲 라운드로빈 돌림판</button>
+    <button class="btn btn-white" id="extraBtn" onclick="toggleExtra()" title="문병린·문정일·양창호를 후보에 포함/제외">➕ 추가 인원</button>
     <button class="btn btn-white" id="toggleFreeBtn" onclick="toggleFreeSlots()">🟢 빈 시간 보기</button>
     <button class="btn btn-outlook" id="syncBtn" onclick="syncOutlook()">☁️ 아웃룩 동기화</button>
     <button class="btn" onclick="openGuideModal()" style="background:#fff;color:#3949ab;border:1.5px solid #c5cae9;font-weight:700;">📖 사용가이드</button>
@@ -1055,6 +1056,36 @@ const MEMBERS = [
   { id: 8, name: '김정환', email: 'junghwan.kim@softcamp.co.kr',  team: 'Partner Online Platform팀', dept: 'Partner Platform부' },
 ];
 
+// ── 추가 후보 3명 (기본 OFF, 헤더 '➕ 추가 인원' 토글로 포함) — 켜면 8명과 동등하게 후보 참여 ──
+const EXTRA_MEMBERS = [
+  { id: 9,  name: '문병린', email: 'brmun@softcamp.co.kr',       team: '추가 후보', dept: '' },
+  { id: 10, name: '문정일', email: 'jungil.moon@softcamp.co.kr', team: '추가 후보', dept: '' },
+  { id: 11, name: '양창호', email: 'chh.yang@softcamp.co.kr',    team: '추가 후보', dept: '' },
+];
+let includeExtra = localStorage.getItem('includeExtra') === '1';
+function ALL()  { return MEMBERS.concat(EXTRA_MEMBERS); }                             // 조회용: 항상 전체(추가 멤버도 이름/ID로 찾힘)
+function pool() { return includeExtra ? MEMBERS.concat(EXTRA_MEMBERS) : MEMBERS; }    // 표시·룰렛용: 토글 상태 반영
+
+// 헤더 '➕ 추가 인원' 토글 — 3명을 후보에 포함/제외
+function toggleExtra() {
+  includeExtra = !includeExtra;
+  localStorage.setItem('includeExtra', includeExtra ? '1' : '0');
+  rrOrder = pool().map(m => m.id);   // 새 풀 기준으로 순서 초기화 후 Notion 이력으로 재구성
+  saveRrOrder();
+  updateExtraBtn();
+  render();
+  if (WORKER_URL) loadRrOrderFromNotion().then(() => {
+    if (document.getElementById('rouletteModal')?.classList.contains('open')) refreshRoulette();
+  });
+  showToast(includeExtra ? '➕ 추가 인원 3명(문병린·문정일·양창호)을 후보에 포함했습니다' : '추가 인원을 제외했습니다 (기존 8명)');
+}
+function updateExtraBtn() {
+  const b = document.getElementById('extraBtn');
+  if (!b) return;
+  b.textContent   = includeExtra ? '➖ 추가 인원 제외' : '➕ 추가 인원';
+  b.style.background = includeExtra ? '#e8f5e9' : '';
+}
+
 const HOURS     = ['08:00','08:30','09:00','09:30','10:00','10:30','11:00','11:30','12:00','12:30',
                     '13:00','13:30','14:00','14:30','15:00','15:30','16:00','16:30',
                     '17:00','17:30','18:00','18:30','19:00','19:30','20:00'];
@@ -1200,7 +1231,7 @@ function renderGrid() {
 
   // ── 1. 컬럼 헤더 ─────────────────────────────────────────────────────────
   let html = `<div class="grid-header"><div class="grid-header-time"></div>`;
-  MEMBERS.forEach(m => {
+  pool().forEach(m => {
     const deployCount = events.filter(e => e.memberId===m.id && e.date===dateStr && e.type==='deploy').length;
     html += `<div class="member-col-header" data-member-header="${m.id}">
       <div class="member-name" id="mname-${m.id}">${m.name}${deployCount>0?` <span class="badge badge-red">배포${deployCount}</span>`:''}</div>
@@ -1213,7 +1244,7 @@ function renderGrid() {
   // ── 2. 하루종일 행 ────────────────────────────────────────────────────────
   html += `<div class="allday-row">
     <div class="allday-label">하루<br>종일</div>`;
-  MEMBERS.forEach(m => {
+  pool().forEach(m => {
     const alldayEvs = events.filter(e => e.memberId===m.id && e.date===dateStr && e.isAllDay);
     html += `<div class="allday-cell">`;
     alldayEvs.forEach(ev => {
@@ -1238,7 +1269,7 @@ function renderGrid() {
     const isHalf    = slotStart.endsWith(':30');
     html += `<div class="timed-slot-row${isHalf?' half-hour':''}">`;
     html += `<div class="time-label${isHalf?' half':''}">${isHalf?'':slotStart}</div>`;
-    MEMBERS.forEach(m => {
+    pool().forEach(m => {
       const isFree = slotIsFree(m.id, dateStr, slotStart);
       html += `<div class="timed-slot-col" onclick="cellClick(event,${m.id},'${dateStr}','${slotStart}')">`;
       if (isFree) html += `<div class="free-indicator">빈 시간</div>`;
@@ -1250,7 +1281,7 @@ function renderGrid() {
   // 이벤트 오버레이 (절대 위치)
   const GRID_END_MIN = 20 * 60; // 20:00 = 1200분
   html += `<div class="events-overlay">`;
-  MEMBERS.forEach(m => {
+  pool().forEach(m => {
     const timedEvs = events.filter(e =>
       e.memberId===m.id && e.date===dateStr && !e.isAllDay
     );
@@ -1318,6 +1349,7 @@ function renderGrid() {
 
   html += `</div>`; // grid-body
 
+  container.style.setProperty('--ncol', String(pool().length));  // 그리드 컬럼 수 = 현재 풀(8 또는 11)
   container.innerHTML = html;
   if (showFree) container.classList.add('show-free');
   else          container.classList.remove('show-free');
@@ -1329,7 +1361,7 @@ function renderSummary() {
   const deployCount = todayEvents.filter(e => e.type==='deploy').length;
   const meetingCount= todayEvents.filter(e => e.type==='meeting').length;
   const deployMembers = new Set(todayEvents.filter(e=>e.type==='deploy').map(e=>e.memberId)).size;
-  const freeList      = MEMBERS.filter(m => !events.some(e=>e.memberId===m.id && e.date===dateStr));
+  const freeList      = pool().filter(m => !events.some(e=>e.memberId===m.id && e.date===dateStr));
   const freeCount     = freeList.length;
 
   document.getElementById('summaryBar').innerHTML = `
@@ -1364,7 +1396,7 @@ function renderSummary() {
 // ─── Flash free members ───────────────────────────────────────────────────
 function flashFreeMembers() {
   const dateStr = selectedDate();
-  const freeIds = MEMBERS
+  const freeIds = pool()
     .filter(m => !events.some(e => e.memberId===m.id && e.date===dateStr))
     .map(m => m.id);
 
@@ -1382,7 +1414,7 @@ function flashFreeMembers() {
     setTimeout(() => el.classList.remove('flashing'), 1400);
   });
 
-  const names = freeIds.map(id => MEMBERS.find(m=>m.id===id)?.name).join(', ');
+  const names = freeIds.map(id => ALL().find(m=>m.id===id)?.name).join(', ');
   showToast(`일정 없는 멤버: ${names}`);
 }
 
@@ -1426,7 +1458,7 @@ function openEventModal(memberId, date, startTime, ev=null) {
   document.getElementById('eventCrmTicketId').value = '';
   document.getElementById('eventCrmStatus').textContent = '';
   if (isDeployType) {
-    const m = MEMBERS.find(x => x.id === (ev?.memberId || parseInt(document.getElementById('fMember').value)));
+    const m = ALL().find(x => x.id === (ev?.memberId || parseInt(document.getElementById('fMember').value)));
     if (m) document.getElementById('eventCrmWinnerLabel').textContent = m.name;
   }
 
@@ -1493,7 +1525,7 @@ function saveEvent() {
       if (old.pageId) ev.pageId = old.pageId;
       // 배포 일정 담당자 변경 → 구 spinLog 삭제 + 신규 담당자 spinLog 추가
       if (ev.type === 'deploy' && old.memberId !== ev.memberId && WORKER_URL) {
-        const newMember = MEMBERS.find(m => m.id === ev.memberId);
+        const newMember = ALL().find(m => m.id === ev.memberId);
         const spunAt = new Date().toLocaleString('ko-KR');
         // 구 담당자 spinLog 삭제
         if (old.spinLogPageId) {
@@ -1539,7 +1571,7 @@ function saveEvent() {
   });
   // 배포지원 유형이면 담당자에게 메일 클라이언트 열기
   if (ev.type === 'deploy') {
-    const m = MEMBERS.find(x => x.id === ev.memberId);
+    const m = ALL().find(x => x.id === ev.memberId);
     if (m) openMailtoLink(m.name, ev.date, ev.startTime, ev.endTime, ev.title, ev.note || '');
   }
 }
@@ -1567,7 +1599,7 @@ function deleteEvent() {
 function openDeployModal() {
   const sel = document.getElementById('dMember');
   sel.innerHTML = '<option value="">-- 멤버 선택 --</option>';
-  MEMBERS.forEach(m => sel.innerHTML += `<option value="${m.id}">${m.name} (${m.team})</option>`);
+  pool().forEach(m => sel.innerHTML += `<option value="${m.id}">${m.name} (${m.team})</option>`);
   populateTimeSelect('dStart','09:00');
   populateTimeSelect('dEnd','18:00');
   document.getElementById('dDate').value = selectedDate();
@@ -1619,7 +1651,7 @@ function saveDeployEvent() {
   currentWeekStart = getMonday(selectedDay);
   closeDeployModal(); render();
 
-  const memberName = MEMBERS.find(x=>x.id===memberId)?.name;
+  const memberName = ALL().find(x=>x.id===memberId)?.name;
   const rangeLabel = days.length > 1 ? `${days[0]} ~ ${days[days.length-1]} (${days.length}일)` : days[0];
   showToast(`${memberName} 배포지원 일정이 투입되었습니다 🚀 (${rangeLabel})`);
 
@@ -1649,7 +1681,7 @@ function saveDeployEvent() {
 
 // ── 배포 담당자에게 메일 클라이언트 열기 (mailto) ──────────────────────
 function openMailtoLink(memberName, date, startTime, endTime, title, note = '') {
-  const member = MEMBERS.find(m => m.name === memberName);
+  const member = ALL().find(m => m.name === memberName);
   const toEmail = member?.email || '';
 
   const subject = `[배포지원 배정] ${title} 담당자로 선정되셨습니다`;
@@ -1760,7 +1792,7 @@ function calGoToday() {
 // ─── Helpers ──────────────────────────────────────────────────────────────
 function populateMemberSelect(id, selectedId) {
   const sel = document.getElementById(id); sel.innerHTML='';
-  MEMBERS.forEach(m => {
+  pool().forEach(m => {
     const opt = document.createElement('option');
     opt.value=m.id; opt.textContent=`${m.name} (${m.team})`;
     if (m.id===selectedId) opt.selected=true;
@@ -1913,6 +1945,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (btn && lastSyncTime) {
     btn.title = `마지막 동기화: ${lastSyncTime}`;
   }
+  updateExtraBtn();
   // Notion에서 최신 이벤트 로드 (Worker 설정된 경우)
   if (WORKER_URL) {
     loadEventsFromNotion();
@@ -1968,7 +2001,7 @@ let spinLogPromise    = null;  // add-spinlog 요청 Promise (pageId 소급 반�
 // Notion 스핀 이력 기반으로 로드, 없으면 localStorage 폴백
 let rrOrder = (() => {
   const s = JSON.parse(localStorage.getItem('rrOrder') || 'null');
-  return (s && s.length === MEMBERS.length) ? s : MEMBERS.map(m => m.id);
+  return (s && s.length === pool().length) ? s : pool().map(m => m.id);
 })();
 function saveRrOrder() { localStorage.setItem('rrOrder', JSON.stringify(rrOrder)); }
 function advanceRrOrder(winnerId) {
@@ -1993,12 +2026,12 @@ async function loadRrOrderFromNotion() {
     // 각 멤버의 마지막 선정 시각 추출 (createdTime 기준 내림차순 정렬된 결과에서 첫 등장)
     const lastPickTime = {}; // memberId → ISO createdTime
     for (const log of logs) {
-      const id = log.memberId || MEMBERS.find(m => m.name === log.name)?.id;
+      const id = log.memberId || ALL().find(m => m.name === log.name)?.id;
       if (id && !(id in lastPickTime)) lastPickTime[id] = log.createdTime;
     }
 
     // 한 번도 안 뽑힌 멤버 = 가장 오래됨(우선순위 최상)
-    const neverPicked = MEMBERS.filter(m => !(m.id in lastPickTime)).map(m => m.id);
+    const neverPicked = pool().filter(m => !(m.id in lastPickTime)).map(m => m.id);
     // 뽑힌 멤버 = 마지막 선정 시각 오름차순 (오래된 순 = 높은 우선순위)
     const pickedSorted = Object.entries(lastPickTime)
       .sort(([, a], [, b]) => a < b ? -1 : 1)
@@ -2157,14 +2190,14 @@ function refreshRoulette() {
 
   // 기간 단위 가용 멤버 필터
   wheelSlices = rrOrder
-    .map(id => MEMBERS.find(m => m.id === id))
-    .filter(m => m && isMemberAvailableInRange(m.id, depDateStart, depDateEnd, depStart, depEnd));
+    .map(id => ALL().find(m => m.id === id))
+    .filter(m => m && pool().some(p => p.id === m.id) && isMemberAvailableInRange(m.id, depDateStart, depDateEnd, depStart, depEnd));
 
   lastWinner = null;
   currentWinner = null;
   const rangeLabel = depDateStart === depDateEnd ? depDateStart : `${depDateStart} ~ ${depDateEnd}`;
   document.getElementById('rrInfo').textContent =
-    `${rangeLabel} ${depStart}~${depEnd} · 가능 ${wheelSlices.length}명 / 전체 ${MEMBERS.length}명`;
+    `${rangeLabel} ${depStart}~${depEnd} · 가능 ${wheelSlices.length}명 / 전체 ${pool().length}명`;
   document.getElementById('resultBanner').className = 'result-banner';
   document.getElementById('resultBanner').innerHTML = '';
   document.getElementById('assignDeployBtn').className = 'assign-deploy-btn';
@@ -2245,7 +2278,7 @@ function renderAvailableMembers() {
 
   // 전체 rrOrder 순서로 표시 (가능 여부 색상 구분)
   document.getElementById('rrQueue').innerHTML = rrOrder.map(id => {
-    const m = MEMBERS.find(x => x.id === id);
+    const m = ALL().find(x => x.id === id);
     if (!m) return '';
     const depDateStart2 = document.getElementById('rDepDateStart')?.value || dateStr;
     const depDateEnd2   = document.getElementById('rDepDateEnd')?.value   || depDateStart2;
@@ -2513,7 +2546,7 @@ function assignFromWheel() {
 // ── 투입 모달: 일정 충돌 감지 ─────────────────────────────────────────────
 function updateDeployCrmLabel() {
   const memberId = parseInt(document.getElementById('dMember').value);
-  const m = MEMBERS.find(x => x.id === memberId);
+  const m = ALL().find(x => x.id === memberId);
   if (m) document.getElementById('deployCrmWinnerLabel').textContent = m.name;
 }
 
@@ -2532,7 +2565,7 @@ function checkDeployConflict() {
     eventsOverlap(start, end, e.startTime, e.endTime)
   );
   if (cs.length > 0) {
-    const m = MEMBERS.find(x => x.id === memberId);
+    const m = ALL().find(x => x.id === memberId);
     msgEl.textContent =
       `${m?.name}님은 해당 시간에 "${cs.map(e=>e.title).join(', ')}" 일정이 있습니다. 그래도 투입하시겠습니까?`;
     warnEl.classList.add('show');
@@ -2647,7 +2680,7 @@ async function lookupDeployCrmTicket() {
 
 async function updateDeployCrmAssignee() {
   const memberId = parseInt(document.getElementById('dMember').value);
-  const member = MEMBERS.find(m => m.id === memberId);
+  const member = ALL().find(m => m.id === memberId);
   if (!deployCrmCurrentTicket || !member || !WORKER_URL) return;
   const btn = document.getElementById('deployCrmAssignBtn');
   btn.textContent = '변경 중...'; btn.disabled = true;
@@ -2681,7 +2714,7 @@ function toggleEventCrmByType() {
   const isDeployType = document.getElementById('fType').value === 'deploy';
   document.getElementById('eventCrmSection').classList.toggle('visible', isDeployType);
   const memberId = parseInt(document.getElementById('fMember').value);
-  const m = MEMBERS.find(x => x.id === memberId);
+  const m = ALL().find(x => x.id === memberId);
   if (m) document.getElementById('eventCrmWinnerLabel').textContent = m.name;
   // 배포지원 타입이면 제목 label·placeholder를 배포용으로 변경
   const titleInput = document.getElementById('fTitle');
@@ -2724,7 +2757,7 @@ async function lookupEventCrmTicket() {
 
 async function updateEventCrmAssignee() {
   const memberId = parseInt(document.getElementById('fMember').value);
-  const member = MEMBERS.find(m => m.id === memberId);
+  const member = ALL().find(m => m.id === memberId);
   if (!eventCrmCurrentTicket || !member || !WORKER_URL) return;
   const btn = document.getElementById('eventCrmAssignBtn');
   btn.textContent = '변경 중...'; btn.disabled = true;
