@@ -1705,14 +1705,35 @@ function saveDeployEvent() {
     });
   });
 
-  // add-spinlog 응답이 늦게 오면 첫 이벤트에 spinLogPageId 소급 반영 (배포 취소 시 우선순위 복구용)
-  if (!created[0].spinLogPageId && spinLogPromise) {
-    spinLogPromise.then(id => {
-      if (id) {
+  // 모든 배정을 공유 스핀 이력 DB에 반드시 기록 (룰렛/직접투입 공통)
+  if (spinLogPromise) {
+    // 룰렛 경로: add-spinlog 응답이 늦게 오면 첫 이벤트에 소급 반영 (배포 취소 시 우선순위 복구용)
+    if (!created[0].spinLogPageId) {
+      spinLogPromise.then(id => {
+        if (id) {
+          const i = events.findIndex(x => x.id === created[0].id);
+          if (i !== -1) { events[i].spinLogPageId = id; saveDataLocal(); }
+        }
+      });
+    }
+  } else if (!lastSpinLogPageId && WORKER_URL) {
+    // 직접 투입(룰렛 미사용): 스핀 이력이 없으므로 여기서 생성 → 공유 DB에 배정 기록 + 우선순위 반영
+    advanceRrOrder(memberId);
+    const spunAt = new Date().toLocaleString('ko-KR');
+    fetch(WORKER_URL, {
+      method:'POST', headers:{'Content-Type':'application/json','X-Action':'add-spinlog'},
+      body: JSON.stringify({ name: memberName, memberId, targetDate: days[0],
+        spunAt: days.length > 1 ? `${spunAt} · 기간 ${days[0]}~${days[days.length-1]}` : spunAt }),
+    })
+    .then(r => r.json())
+    .then(d => {
+      if (d.ok && d.pageId) {
         const i = events.findIndex(x => x.id === created[0].id);
-        if (i !== -1) { events[i].spinLogPageId = id; saveDataLocal(); }
+        if (i !== -1) { events[i].spinLogPageId = d.pageId; saveDataLocal(); }
+        loadRrOrderFromNotion();
       }
-    });
+    })
+    .catch(() => showToast('⚠️ 스핀 이력 저장 실패 (프록시 확인 후 재시도)'));
   }
 
   // 배포 담당자에게 메일 클라이언트 열기 (기간 표기)
