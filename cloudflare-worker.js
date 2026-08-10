@@ -286,6 +286,7 @@ export default {
           const logs=(data.results||[]).map(p=>{
             const pr=p.properties||{};
             return {
+              id:         p.id,
               name:       getNotionText(pr,'이름'),
               targetDate: pr['날짜']?.date?.start||'',
               spunAt:     getNotionRichText(pr,'스핀일'),
@@ -294,6 +295,18 @@ export default {
             };
           });
           result={ok:true,logs}; break;
+        }
+
+        // ── 배정 취소: 스핀 이력을 [취소]로 표시(삭제 X) + 멤버ID 제거 → 우선순위 계산서 제외 ──
+        case 'cancel-spinlog': {
+          if (!env.NOTION_SECRET) throw new Error('Notion 미설정');
+          if (!body?.pageId) throw new Error('pageId 필요');
+          const nm = (body.name||'').replace(/^\[취소\]\s*/,'');
+          await notion(env,'PATCH',`/pages/${body.pageId}`,{properties:mapSpinProps({
+            'NAME':     {title:[{text:{content:`[취소] ${nm}`}}]},
+            'MEMBERID': {number:null},
+          })});
+          result={ok:true}; break;
         }
 
         // ── vtiger: 티켓 조회 ────────────────────────────────────────────
