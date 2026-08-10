@@ -1035,6 +1035,7 @@
         </table>
       </div>
       <div class="modal-actions" style="margin-top:14px">
+        <button class="btn" onclick="rebuildSpinlogFromLocal()" title="이 브라우저의 실제 배정 기준으로 공유 스핀이력을 다시 만듭니다" style="background:#fff3e0;color:#e65100;border:1px solid #ffcc80;font-weight:600;">🔧 스핀 이력 재구성</button>
         <button class="rr-reset-btn" onclick="resetPickHistory()">🗑 이력 전체 삭제</button>
         <button class="btn btn-secondary" onclick="closeRoulette()">닫기</button>
       </div>
@@ -2594,6 +2595,44 @@ async function cancelAssignment(id, name) {
   render();
   if (document.getElementById('rouletteModal')?.classList.contains('open')) refreshRoulette();
   showToast(`${name}님 배정 취소 완료 — 이력 유지, 우선순위 복구됨`);
+}
+
+// 로컬의 '진짜 배정'(직접/룰렛 · 아웃룩 동기화 제외) 기준으로 공유 스핀 이력 재구성
+async function rebuildSpinlogFromLocal() {
+  if (!WORKER_URL) { showToast('Worker(서버) 미설정'); return; }
+  if (!confirm('이 브라우저에 저장된 "실제 배정" 기준으로 공유 스핀 이력을 재구성합니다.\n\n· 자동복원(복원 배정) 항목은 삭제\n· 아웃룩 동기화 일정은 제외 — 직접/룰렛 배정만 기록\n· 배정 1건당 스핀이력 1건(중복 방지)\n\n※ 프록시가 꺼져 있어야 저장됩니다. 진행할까요?')) return;
+  showToast('재구성 중… 잠시만요');
+  await loadRrOrderFromNotion();
+  const logs = notionSpinLog || [];
+  // 1) 잘못된 자동복원(복원 배정) 항목 삭제
+  let removed = 0;
+  for (const l of logs.filter(x => (x.spunAt || '').startsWith('복원 배정'))) {
+    try { await fetch(WORKER_URL, {method:'POST',headers:{'Content-Type':'application/json','X-Action':'delete-spinlog'},body:JSON.stringify({pageId:l.id})}); removed++; } catch(_){}
+  }
+  const remain = logs.filter(x => !(x.spunAt || '').startsWith('복원 배정'));
+  // 2) 로컬 실제 배정만 그룹화 (아웃룩 동기화 fromOutlook 제외)
+  const groups = {};
+  events.filter(e => e.type === 'deploy' && !e.fromOutlook)
+        .forEach(e => { const k = e.memberId + '|' + (e.title || ''); (groups[k] = groups[k] || []).push(e.date); });
+  // 3) 남은 정상 이력과 중복 아니면 생성
+  let created = 0;
+  for (const [k, dates] of Object.entries(groups)) {
+    const memberId = +k.split('|')[0];
+    dates.sort();
+    const s = dates[0], e2 = dates[dates.length - 1];
+    const name = (ALL().find(m => m.id === memberId) || {}).name;
+    if (!name) continue;
+    if (remain.some(x => x.memberId === memberId && x.targetDate === s)) continue;
+    const spunAt = new Date().toLocaleString('ko-KR');
+    try {
+      await fetch(WORKER_URL, {method:'POST',headers:{'Content-Type':'application/json','X-Action':'add-spinlog'},
+        body: JSON.stringify({ name, memberId, targetDate: s, spunAt: s === e2 ? spunAt : `${spunAt} · 기간 ${s}~${e2}` })});
+      created++;
+    } catch(_){}
+  }
+  await loadRrOrderFromNotion();
+  render();
+  showToast(`✅ 재구성 완료 — 잘못된 복원 ${removed}건 삭제, 실제 배정 ${created}건 기록`);
 }
 
 function resetPickHistory() {
