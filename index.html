@@ -464,6 +464,22 @@
     filter: drop-shadow(0 2px 3px rgba(0,0,0,0.25)); }
   #wheelCanvas { border-radius: 50%; box-shadow: 0 4px 20px rgba(0,0,0,0.15); cursor: pointer; display: block; }
 
+  /* 헤더 드롭다운 (보기 / 도움말) */
+  .hdr-dd { position: relative; display: inline-block; }
+  .hdr-menu {
+    position: absolute; top: calc(100% + 4px); right: 0;
+    background: #fff; border: 1px solid #c5cae9; border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.14); padding: 6px; min-width: 168px;
+    z-index: 300; display: none;
+  }
+  .hdr-menu.open { display: block; }
+  .hdr-menu button {
+    display: block; width: 100%; text-align: left; background: none; border: none;
+    padding: 8px 10px; border-radius: 6px; font-size: 13px; cursor: pointer; color: #333; white-space: nowrap;
+  }
+  .hdr-menu button:hover { background: #f3f4ff; }
+  /* 이미 배정된 기간 경고(주황) */
+  .result-banner.warn { background: #fff3e0 !important; color: #e65100 !important; border: 1px solid #ffcc80 !important; }
   .result-banner {
     text-align: center; padding: 0; border-radius: 10px;
     font-size: 15px; font-weight: 700; overflow: hidden;
@@ -723,16 +739,26 @@
 <div class="header">
   <div class="header-left">
     <h1><a href="https://emitlight.github.io/deploy-schedule/" style="color:inherit;text-decoration:none;">🚀 본부 멤버 배포지원 투입관리 대시보드</a></h1>
-    <p>Partner / Appliance / Security 365 Platform부 · 8명</p>
+    <p>Partner / Appliance / Security 365 Platform부 · <span id="memberCount">8</span>명</p>
   </div>
   <div class="header-right">
-    <button class="btn btn-white" onclick="openRoulette()">🎲 라운드로빈 돌림판</button>
-    <button class="btn btn-white" id="extraBtn" onclick="toggleExtra()" title="문병린·문정일·양창호를 후보에 포함/제외">➕ 추가 인원</button>
-    <button class="btn btn-white" id="toggleFreeBtn" onclick="toggleFreeSlots()">🟢 빈 시간 보기</button>
-    <button class="btn btn-outlook" id="syncBtn" onclick="syncOutlook()">☁️ 아웃룩 동기화</button>
-    <button class="btn" onclick="openGuideModal()" style="background:#fff;color:#3949ab;border:1.5px solid #c5cae9;font-weight:700;">📖 사용가이드</button>
-    <button class="btn" onclick="openTagModal()" style="background:#fff;color:#00897b;border:1.5px solid #b2dfdb;font-weight:700;">🏷️ 태그 안내</button>
-        <button class="btn btn-deploy" onclick="openDeployModal()">🚀 배포지원 투입</button>
+    <button class="btn" onclick="openRoulette()" style="background:#3949ab;color:#fff;font-weight:700;">🎲 배포지원 배정</button>
+    <button class="btn btn-white" onclick="openDeployModal()">🚀 직접 투입</button>
+    <button class="btn btn-white" id="syncBtn" onclick="syncOutlook()" title="아웃룩 동기화 (매일 자동 3회)">☁️ 동기화</button>
+    <div class="hdr-dd">
+      <button class="btn btn-white" onclick="toggleHdrMenu(event,'viewMenu')">👁️ 보기 ▾</button>
+      <div class="hdr-menu" id="viewMenu">
+        <button id="toggleFreeBtn" onclick="toggleFreeSlots()">🟢 빈 시간 보기</button>
+        <button id="extraBtn" onclick="toggleExtra()" title="문병린·문정일·양창호를 후보에 포함/제외">➕ 추가 인원</button>
+      </div>
+    </div>
+    <div class="hdr-dd">
+      <button class="btn btn-white" onclick="toggleHdrMenu(event,'helpMenu')">❓ 도움말 ▾</button>
+      <div class="hdr-menu" id="helpMenu">
+        <button onclick="openGuideModal();closeHdrMenus()">📖 사용가이드</button>
+        <button onclick="openTagModal();closeHdrMenus()">🏷️ 태그 안내</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1081,10 +1107,24 @@ function toggleExtra() {
 }
 function updateExtraBtn() {
   const b = document.getElementById('extraBtn');
-  if (!b) return;
-  b.textContent   = includeExtra ? '➖ 추가 인원 제외' : '➕ 추가 인원';
-  b.style.background = includeExtra ? '#e8f5e9' : '';
+  if (b) {
+    b.textContent     = includeExtra ? '➖ 추가 인원 제외 (8명)' : '➕ 추가 인원 포함 (11명)';
+    b.style.background = includeExtra ? '#e8f5e9' : '';
+  }
+  const c = document.getElementById('memberCount');
+  if (c) c.textContent = String(pool().length);   // 부제 인원수 동기화
 }
+
+// 헤더 드롭다운 (보기 / 도움말) 열고 닫기
+function toggleHdrMenu(e, id) {
+  e.stopPropagation();
+  const m = document.getElementById(id);
+  const wasOpen = m.classList.contains('open');
+  closeHdrMenus();
+  if (!wasOpen) m.classList.add('open');
+}
+function closeHdrMenus() { document.querySelectorAll('.hdr-menu').forEach(m => m.classList.remove('open')); }
+document.addEventListener('click', e => { if (!e.target.closest('.hdr-dd')) closeHdrMenus(); });
 
 const HOURS     = ['08:00','08:30','09:00','09:30','10:00','10:30','11:00','11:30','12:00','12:30',
                     '13:00','13:30','14:00','14:30','15:00','15:30','16:00','16:30',
@@ -2239,8 +2279,9 @@ function refreshRoulette() {
     .map(e => (ALL().find(m => m.id === e.memberId) || {}).name).filter(Boolean))];
   if (_assigned.length > 0) {
     spinBtnEl.disabled = true;
+    spinBtnEl.textContent = '⛔ 이미 배정됨 — 취소 후 가능';
     const banner = document.getElementById('resultBanner');
-    banner.className = 'result-banner show';
+    banner.className = 'result-banner show warn';   // 주황 경고(초록 성공색과 구분)
     banner.innerHTML = `⚠️ 이 기간엔 이미 <b>${_assigned.join(', ')}</b> 배정됨<br><span style="font-size:12px;font-weight:400;">재배정하려면 📋 스핀 이력 탭에서 '배정 취소' 후 다시 돌려주세요</span>`;
     document.getElementById('assignDeployBtn').className = 'assign-deploy-btn';  // 배정 버튼 숨김
   }
