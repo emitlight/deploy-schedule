@@ -2415,12 +2415,18 @@ function getUnavailReason(memberId, startDate, endDate, startTime, endTime) {
       !isFreeTimeEvent(ev));
     return e ? { d, e } : null;
   }).filter(Boolean);
-  if (blockedDays.length === 0) return '해당 기간에 평일이 없음';
-  const { d, e } = blockedDays[0];
-  const md   = d.slice(5).replace('-', '/');
-  const time = e.isAllDay ? '종일' : `${e.startTime}~${e.endTime}`;
-  const more = blockedDays.length > 1 ? ` 외 ${blockedDays.length - 1}일` : '';
-  return `${md} ${time} · ${unavailReasonLabel(e)}${more}`;
+  if (blockedDays.length === 0) return ['해당 기간에 평일이 없음'];
+  // 불가한 모든 날짜를 표시하되, 연속된 평일에 같은 사유(시간·분류)면 '10/13~10/14'로 묶음
+  const allDays = getDateRange(startDate, endDate);
+  const md = d => d.slice(5).replace('-', '/');
+  const groups = [];
+  blockedDays.forEach(({ d, e }) => {
+    const text = `${e.isAllDay ? '종일' : `${e.startTime}~${e.endTime}`} · ${unavailReasonLabel(e)}`;
+    const g = groups[groups.length - 1];
+    if (g && g.text === text && allDays.indexOf(d) === allDays.indexOf(g.end) + 1) g.end = d;
+    else groups.push({ start: d, end: d, text });
+  });
+  return groups.map(g => `${md(g.start)}${g.end !== g.start ? '~' + md(g.end) : ''} ${g.text}`);
 }
 
 function renderUnavailReasons() {
@@ -2433,7 +2439,7 @@ function renderUnavailReasons() {
   const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const rows = pool()
     .filter(m => !isMemberAvailableInRange(m.id, ds, de, st, et))
-    .map(m => `<div class="ur-row"><span class="ur-name">${esc(m.name)}</span>${esc(getUnavailReason(m.id, ds, de, st, et))}</div>`);
+    .map(m => `<div class="ur-row"><span class="ur-name">${esc(m.name)}</span>${getUnavailReason(m.id, ds, de, st, et).map(esc).join(' / ')}</div>`);
   box.innerHTML = rows.length ? `<div class="ur-title">🚫 배포 불가 사유</div>${rows.join('')}` : '';
 }
 
