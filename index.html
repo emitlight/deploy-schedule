@@ -434,6 +434,15 @@
   .rr-item.unavail { background: #fafafa; color: #c0c4d0; border-color: #eeeeee;
                      text-decoration: line-through; font-size: 11px; }
   .rr-conflict-hint { font-size: 8px; color: #ccc; display: block; text-decoration: none; }
+  /* 배포 불가 사유 안내 (룰렛 위) */
+  .rr-unavail-reasons {
+    font-size: 11px; color: #6d4c41; background: #fff8f0;
+    border: 1px solid #ffe0b2; border-radius: 8px; padding: 6px 10px; margin-bottom: 8px;
+  }
+  .rr-unavail-reasons:empty { display: none; }
+  .rr-unavail-reasons .ur-title { font-weight: 700; color: #e65100; margin-bottom: 3px; }
+  .rr-unavail-reasons .ur-row { line-height: 1.6; }
+  .rr-unavail-reasons .ur-name { font-weight: 700; color: #4e342e; margin-right: 4px; }
   .rr-rule-note {
     text-align: center; font-size: 11px; color: #7986cb;
     background: #f3f4ff; border-radius: 8px; padding: 5px 10px;
@@ -978,6 +987,7 @@
         <div class="rr-queue-label">배포 가능 멤버</div>
         <div class="rr-queue" id="rrQueue"></div>
       </div>
+      <div class="rr-unavail-reasons" id="rrUnavailReasons"></div>
       <div class="rr-rule-note">
         🔄 최근에 뽑힌 사람은 자동으로 <strong>후순위</strong>로 밀립니다
       </div>
@@ -2379,6 +2389,52 @@ function renderAvailableMembers() {
       ${!avail && conflictTxt ? `<span class="rr-conflict-hint">${conflictTxt}</span>` : ''}
     </div>`;
   }).join('');
+  renderUnavailReasons();
+}
+
+// ── 배포 불가 사유 안내 (룰렛 위 박스) ──────────────────────────────
+// 불가 판정된 멤버마다 '처음 걸린 날짜 + 원인 일정'을 한 줄로 표시
+function unavailReasonLabel(e) {
+  const nc = CLS_FROM_KR[e.classification] || (e.id ? tagOverrides[e.id] : null);
+  if (nc === 'blocking') return '매니저 수동 분류(불가)';
+  const title = normalizeTitle(e.title);
+  if (titleHasAvailableTag(title) && !e.isAllDay && title.includes('원격')) return '원격 지원 중';
+  const out = OUT_KEYWORDS.find(k => title.includes(k));
+  if (e.type === 'out' || out) return `부재(${out || '휴가·외근'})`;
+  const tag = (title.match(/\[[^\]]+\]/) || [])[0];
+  if (tag) return `고객사·전담 업무 ${tag}`;
+  return '일정 충돌';
+}
+
+function getUnavailReason(memberId, startDate, endDate, startTime, endTime) {
+  // 기간 내 불가한 날짜들과 원인 일정 수집
+  const blockedDays = getDateRange(startDate, endDate).map(d => {
+    const e = events.find(ev =>
+      ev.memberId === memberId && ev.date === d &&
+      (ev.isAllDay || eventsOverlap(startTime, endTime, ev.startTime, ev.endTime)) &&
+      !isFreeTimeEvent(ev));
+    return e ? { d, e } : null;
+  }).filter(Boolean);
+  if (blockedDays.length === 0) return '해당 기간에 평일이 없음';
+  const { d, e } = blockedDays[0];
+  const md   = d.slice(5).replace('-', '/');
+  const time = e.isAllDay ? '종일' : `${e.startTime}~${e.endTime}`;
+  const more = blockedDays.length > 1 ? ` 외 ${blockedDays.length - 1}일` : '';
+  return `${md} ${time} · ${unavailReasonLabel(e)}${more}`;
+}
+
+function renderUnavailReasons() {
+  const box = document.getElementById('rrUnavailReasons');
+  if (!box) return;
+  const ds = document.getElementById('rDepDateStart')?.value || selectedDate();
+  const de = document.getElementById('rDepDateEnd')?.value   || ds;
+  const st = document.getElementById('rDepStart')?.value || '09:00';
+  const et = document.getElementById('rDepEnd')?.value   || '18:00';
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const rows = pool()
+    .filter(m => !isMemberAvailableInRange(m.id, ds, de, st, et))
+    .map(m => `<div class="ur-row"><span class="ur-name">${esc(m.name)}</span>${esc(getUnavailReason(m.id, ds, de, st, et))}</div>`);
+  box.innerHTML = rows.length ? `<div class="ur-title">🚫 배포 불가 사유</div>${rows.join('')}` : '';
 }
 
 function drawWheelAt(rot) {
