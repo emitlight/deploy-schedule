@@ -1137,36 +1137,70 @@ function pool() {                                           // 표시·룰렛용
   return includeExtra ? MEMBERS.concat(EXTRA_MEMBERS) : MEMBERS;
 }
 
-// 헤더 '추가 인원' 버튼 — 후보 명단은 이제 서버가 결정한다(모든 PC 동일).
-// 명단 변경은 Cloudflare 환경변수 INCLUDE_EXTRA(0/1) 로 하며, 여기서는 현황만 안내한다.
-function toggleExtra() {
-  if (serverRoster && serverRoster.length) {
-    showToast(includeExtra
-      ? `현재 후보 ${serverRoster.length}명 (추가 인원 포함) — 명단 변경은 관리자에게 요청하세요`
-      : `현재 후보 ${serverRoster.length}명 (기본 인원) — 명단 변경은 관리자에게 요청하세요`);
+// 헤더 '추가 인원' 토글 — 서버에 저장돼 모든 PC에 동일하게 반영된다.
+// (과거엔 PC별 localStorage라 운영자마다 후보군이 8명/11명으로 갈렸다)
+let rosterConfig = null;   // 서버 공유 설정 {includeExtra, editable, updatedAt, updatedBy}
+
+async function toggleExtra() {
+  const next = !includeExtra;
+  const btn = document.getElementById('extraBtn');
+
+  // 서버 설정을 쓸 수 없는 상태(저장소 미연결·오프라인)면 이 PC에만 적용하고 그렇다고 알린다
+  if (!WORKER_URL || (rosterConfig && rosterConfig.editable === false)) {
+    includeExtra = next;
+    localStorage.setItem('includeExtra', next ? '1' : '0');
+    serverRoster = null;                       // 로컬 판단으로 전환
+    updateExtraBtn(); render();
+    showToast(`⚠️ 이 PC에만 적용됩니다 — 서버 공유 설정 미연결 (후보 ${pool().length}명)`);
     return;
   }
-  // 서버 응답 전(또는 오프라인) 로컬 폴백
-  includeExtra = !includeExtra;
-  localStorage.setItem('includeExtra', includeExtra ? '1' : '0');
+
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ 변경 중…'; }
+  try {
+    const r = await workerPost('set-roster-config', { includeExtra: next, by: '대시보드' });
+    if (!r || !r.ok) throw new Error('저장 실패');
+    applyRosterResponse(r);
+    showToast(next
+      ? `➕ 추가 인원 3명(문병린·문정일·양창호)을 후보에 포함했습니다 — 모든 PC 반영`
+      : `➖ 추가 인원을 제외했습니다 (후보 ${serverRoster.length}명) — 모든 PC 반영`);
+    // 명단이 바뀌었으므로 우선순위와 열려 있는 룰렛을 다시 계산
+    await loadRrOrderFromNotion();
+    if (document.getElementById('rouletteModal')?.classList.contains('open')) {
+      availCtx = null;
+      await ensureRouletteRangeData();
+      refreshRoulette();
+    }
+  } catch (e) {
+    showToast(`변경 실패 — ${String(e.message || e)}`);
+  } finally {
+    if (btn) btn.disabled = false;
+    updateExtraBtn();
+  }
+}
+
+// get-roster / set-roster-config 응답을 화면 상태에 반영
+function applyRosterResponse(r) {
+  if (!r || !Array.isArray(r.members) || !r.members.length) return;
+  serverRoster = r.members;
+  rosterConfig = r.config || null;
+  includeExtra = r.config ? !!r.config.includeExtra : serverRoster.some(m => m.extra);
   updateExtraBtn();
   render();
-  if (WORKER_URL) loadRrOrderFromNotion().then(() => {
-    if (document.getElementById('rouletteModal')?.classList.contains('open')) refreshRoulette();
-  });
-  showToast('⚠️ 서버 명단 확인 전입니다 — 이 PC에만 적용됩니다');
 }
 function updateExtraBtn() {
   const n = pool().length;
+  const total = ALL().length;
   const b = document.getElementById('extraBtn');
   if (b) {
-    b.textContent = serverRoster && serverRoster.length
-      ? `👥 후보 ${n}명${includeExtra ? ' (추가 인원 포함)' : ''}`
-      : (includeExtra ? '➖ 추가 인원 제외 (8명)' : '➕ 추가 인원 포함 (11명)');
+    // 라벨은 '누르면 무엇이 되는지'를 보여준다
+    b.textContent = includeExtra ? `➖ 추가 인원 제외 (${n}→${total - 3}명)`
+                                 : `➕ 추가 인원 포함 (${n}→${total}명)`;
     b.style.background = includeExtra ? '#e8f5e9' : '';
-    b.title = serverRoster && serverRoster.length
-      ? '후보 명단은 서버 설정(INCLUDE_EXTRA)으로 모든 사용자에게 동일하게 적용됩니다'
-      : '문병린·문정일·양창호를 후보에 포함/제외';
+    const shared = rosterConfig && rosterConfig.editable;
+    b.title = shared
+      ? `문병린·문정일·양창호를 후보에 포함/제외 — 변경하면 모든 PC에 반영됩니다${
+          rosterConfig.updatedAt ? `\n마지막 변경: ${new Date(rosterConfig.updatedAt).toLocaleString('ko-KR')}` : ''}`
+      : '문병린·문정일·양창호를 후보에 포함/제외 (서버 공유 설정 미연결 — 이 PC에만 적용)';
   }
   const c = document.getElementById('memberCount');
   if (c) c.textContent = String(n);   // 부제 인원수 동기화
@@ -2051,12 +2085,7 @@ async function loadServerRoster() {
   if (!WORKER_URL) return;
   try {
     const r = await workerPost('get-roster');
-    if (r && r.ok && Array.isArray(r.members) && r.members.length) {
-      serverRoster = r.members;
-      includeExtra = serverRoster.some(m => m.extra);
-      updateExtraBtn();
-      render();
-    }
+    if (r && r.ok) applyRosterResponse(r);
   } catch (_) { /* 실패 시 로컬 설정 유지 */ }
 }
 
@@ -2420,6 +2449,7 @@ async function fetchAvailability(ds, de, st, et) {
       updateExtraBtn();
     }
   } catch (_) {
+    /* 폴백 */
     availCtx = null;
   }
   return availCtx;

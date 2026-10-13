@@ -163,9 +163,18 @@ export default {
           break;
         }
 
-        // ── 멤버 명단 (가벼움 — 외부 API 호출 없음) ─────────────────────
+        // ── 멤버 명단 + 공유 설정 (가벼움 — 외부 API 호출 없음) ──────────
         case 'get-roster': {
-          result = { ok:true, members: buildRoster(env) };
+          const cfg = await readSettings(env);
+          result = { ok:true, members: buildRoster(env, cfg.includeExtra), config: cfg };
+          break;
+        }
+
+        // ── 후보 명단 설정 변경 (모든 PC 공유) ───────────────────────────
+        case 'set-roster-config': {
+          const saved = await writeSettings(env, { includeExtra: !!body?.includeExtra }, body?.by);
+          const cfg = await readSettings(env);
+          result = { ok:true, members: buildRoster(env, saved.includeExtra), config: cfg };
           break;
         }
 
@@ -693,7 +702,8 @@ async function buildAvailability(env, { startDate, endDate, startTime, endTime }
   const sT = startTime || '09:00', eT = endTime || '18:00';
   const days = weekdayRange(startDate, endDate);
 
-  const roster = buildRoster(env);
+  const cfg = await readSettings(env);
+  const roster = buildRoster(env, cfg.includeExtra);
   // 아웃룩(원천) + Notion(배정·수동분류)을 합쳐 판정 입력을 만든다
   const [outlook, notionRows] = await Promise.all([
     cachedSyncOutlook(env, startDate, endDate),
@@ -761,13 +771,53 @@ async function cachedSyncOutlook(env, startDate, endDate) {
   return data;
 }
 
-// 멤버 명단 — 서버(환경변수)가 유일한 기준.
+// ── 공유 설정 (KV) ────────────────────────────────────────────────────────
+// 운영자가 화면에서 바꾸는 설정을 모든 PC가 함께 보도록 서버에 보관한다.
+// KV 바인딩(SETTINGS)이 없으면 환경변수 INCLUDE_EXTRA 를 읽기 전용으로 사용한다.
+const SETTINGS_KEY = 'roster-config';
+
+async function readSettings(env) {
+  const fallback = { includeExtra: String(env.INCLUDE_EXTRA ?? '0') === '1' };
+  if (!env.SETTINGS) return { ...fallback, editable: false, source: 'env' };
+  try {
+    const raw = await env.SETTINGS.get(SETTINGS_KEY);
+    const saved = raw ? JSON.parse(raw) : null;
+    return {
+      includeExtra: saved && typeof saved.includeExtra === 'boolean'
+        ? saved.includeExtra : fallback.includeExtra,
+      editable: true, source: saved ? 'kv' : 'env',
+      updatedAt: saved?.updatedAt || null, updatedBy: saved?.updatedBy || null,
+    };
+  } catch (e) {
+    console.error('[settings] 읽기 실패:', e.message);
+    return { ...fallback, editable: false, source: 'env' };
+  }
+}
+
+async function writeSettings(env, patch, who) {
+  if (!env.SETTINGS) {
+    const err = new Error('서버에 공유 설정 저장소(KV)가 연결돼 있지 않습니다. 관리자 설정 필요: wrangler kv namespace create SETTINGS');
+    err.status = 501;
+    throw err;
+  }
+  const cur = await readSettings(env);
+  const next = {
+    includeExtra: typeof patch.includeExtra === 'boolean' ? patch.includeExtra : cur.includeExtra,
+    updatedAt: new Date().toISOString(),
+    updatedBy: (who || '').slice(0, 40),
+  };
+  await env.SETTINGS.put(SETTINGS_KEY, JSON.stringify(next));
+  return next;
+}
+
+// 멤버 명단 — 서버가 유일한 기준.
 // ⚠️ 과거엔 프론트의 '추가 인원' 토글이 PC별 localStorage에 저장돼,
-//    같은 날 운영자마다 후보군(8명/11명)이 달랐다. 이제 서버가 결정한다.
-function buildRoster(env) {
+//    같은 날 운영자마다 후보군(8명/11명)이 달랐다. 이제 서버 공유 설정을 따른다.
+function buildRoster(env, includeExtraOverride) {
   const emails = JSON.parse(env.MEMBER_EMAILS || '{}');
   const ids    = JSON.parse(env.MEMBER_IDS    || '{}');
-  const includeExtra = String(env.INCLUDE_EXTRA ?? '0') === '1';
+  const includeExtra = typeof includeExtraOverride === 'boolean'
+    ? includeExtraOverride : String(env.INCLUDE_EXTRA ?? '0') === '1';
   const extraIds = new Set(Object.values(EXTRA_MEMBERS).map(([, id]) => id));
   for (const [nm,[em,eid]] of Object.entries(EXTRA_MEMBERS)) {
     if (!emails[nm]) emails[nm] = em;
@@ -807,7 +857,7 @@ async function buildStats(env, { from, to } = {}) {
     };
   });
 
-  const roster = buildRoster(env);
+  const roster = buildRoster(env, (await readSettings(env)).includeExtra);
   const inRange = l => (!from || l.createdTime.slice(0,10) >= from)
                     && (!to   || l.createdTime.slice(0,10) <= to);
   const valid = logs.filter(l => l.memberId != null && inRange(l));
