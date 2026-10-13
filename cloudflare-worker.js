@@ -25,14 +25,22 @@ export default {
   // ── HTTP 요청 핸들러 ──────────────────────────────────────────────────
   async fetch(request, env) {
     if (request.method === 'OPTIONS') return new Response(null,{status:204,headers:CORS});
-    // 접근 비밀번호 게이트: env.APP_PASSWORD를 설정한 경우에만 검사(미설정이면 통과 → 기존 동작 유지)
-    // ⚠️ 보안 검토 필요: 프론트가 공개(GitHub Pages)이므로 이 토큰은 '캐주얼 차단'용. 완전한 인증은 Cloudflare Access(SSO) 권장.
-    if (env.APP_PASSWORD && request.headers.get('X-Auth') !== env.APP_PASSWORD) {
+
+    // ── 접근 게이트 (fail-closed) ───────────────────────────────────────
+    // ⚠️ 보안 검토 필요: 프론트가 공개(GitHub Pages)이므로 공유 비밀번호는 '캐주얼 차단' 수준.
+    //    완전한 인증은 Cloudflare Access(SSO) 권장. 단, 미설정 시 전면 공개되던 fail-open은 제거함.
+    if (!env.APP_PASSWORD) {
+      return new Response(JSON.stringify({ ok:false, error:'server_not_configured',
+        message:'APP_PASSWORD 미설정 — 관리자가 `wrangler secret put APP_PASSWORD` 실행 필요' }),
+        { status:503, headers:{ ...CORS, 'Content-Type':'application/json' } });
+    }
+    if (!safeEqual(request.headers.get('X-Auth') || '', env.APP_PASSWORD)) {
       return new Response(JSON.stringify({ ok:false, error:'unauthorized' }),
         { status:401, headers:{ ...CORS, 'Content-Type':'application/json' } });
     }
-    const url    = new URL(request.url);
-    const action = request.headers.get('X-Action') || url.searchParams.get('action');
+
+    // 액션은 헤더로만 수신 — ?action= 쿼리 경로 제거(주소창 GET 한 번으로 호출되던 문제 차단)
+    const action = request.headers.get('X-Action');
     const body   = ['POST','PATCH','DELETE'].includes(request.method)
                    ? await request.json().catch(()=>({})) : null;
     try {
@@ -53,13 +61,13 @@ export default {
 
           const subject = `[배포지원 배정] ${title || '배포지원'} 담당자로 선정되셨습니다`;
           const bodyHtml = `
-            <p>안녕하세요, <b>${toMemberName}</b>님</p>
+            <p>안녕하세요, <b>${esc(toMemberName)}</b>님</p>
             <p>아래 배포지원 일정의 담당자로 선정되셨습니다.</p>
             <table style="border-collapse:collapse;margin:12px 0">
-              <tr><td style="padding:4px 12px 4px 0;color:#666">배포 내용</td><td><b>${title || '-'}</b></td></tr>
-              <tr><td style="padding:4px 12px 4px 0;color:#666">날짜</td><td>${date || '-'}</td></tr>
-              <tr><td style="padding:4px 12px 4px 0;color:#666">시간</td><td>${startTime || '-'} ~ ${endTime || '-'}</td></tr>
-              ${note ? `<tr><td style="padding:4px 12px 4px 0;color:#666">메모</td><td>${note}</td></tr>` : ''}
+              <tr><td style="padding:4px 12px 4px 0;color:#666">배포 내용</td><td><b>${esc(title || '-')}</b></td></tr>
+              <tr><td style="padding:4px 12px 4px 0;color:#666">날짜</td><td>${esc(date || '-')}</td></tr>
+              <tr><td style="padding:4px 12px 4px 0;color:#666">시간</td><td>${esc(startTime || '-')} ~ ${esc(endTime || '-')}</td></tr>
+              ${note ? `<tr><td style="padding:4px 12px 4px 0;color:#666">메모</td><td>${esc(note)}</td></tr>` : ''}
             </table>
             <p>일정 확인 후 문의사항은 파트너프로그램팀(ps2@softcamp.co.kr)에게 연락해 주세요.</p>
             <p style="color:#888;font-size:12px">본 메일은 배포지원 투입관리 시스템에서 자동 발송되었습니다.</p>
@@ -109,7 +117,7 @@ export default {
             subject: `[배포지원 결정] ${title || '배포지원 일정'}`,
             body: {
               contentType: 'HTML',
-              content: `<p>배포지원 담당자로 배정되었습니다.</p><p><b>일정:</b> ${date} ${startTime} ~ ${endTime}</p>${note ? `<p><b>내용:</b> ${note}</p>` : ''}`,
+              content: `<p>배포지원 담당자로 배정되었습니다.</p><p><b>일정:</b> ${esc(date)} ${esc(startTime)} ~ ${esc(endTime)}</p>${note ? `<p><b>내용:</b> ${esc(note)}</p>` : ''}`,
             },
             start: { dateTime: startDT, timeZone: 'Korea Standard Time' },
             end:   { dateTime: endDT,   timeZone: 'Korea Standard Time' },
@@ -143,8 +151,9 @@ export default {
 
         // ── Cron과 동일한 아웃룩 자동 동기화 (수동 트리거) ──────────────
         case 'run-sync': {
-          await runScheduledSync(env);
-          result = {ok:true, message:'동기화 완료'};
+          // 실제 결과(생성/수정/생략/아카이브/오류/실패멤버)를 그대로 반환 —
+          // 과거엔 실패해도 무조건 '동기화 완료'를 돌려줘 장애가 보이지 않았다.
+          result = await runScheduledSync(env);
           break;
         }
 
@@ -180,7 +189,7 @@ export default {
           const allPages = [];
           let cursor = undefined;
           while (true) {
-            const payload = {page_size:200};
+            const payload = {page_size:100};
             if (cursor) payload.start_cursor = cursor;
             const res = await notion(env,'POST',`/databases/${env.SCHEDULES_DB_ID}/query`,payload);
             const data = await res.json();
@@ -196,6 +205,7 @@ export default {
         // ── Notion에 일정 저장 (신규/수정) ──────────────────────────────
         case 'save-event': {
           if (!env.NOTION_SECRET||!env.SCHEDULES_DB_ID) throw new Error('Notion 미설정');
+          await ensureSpinLogProp(env);
           if (body.pageId) {
             // 수정
             const res=await notion(env,'PATCH',`/pages/${body.pageId}`,
@@ -215,9 +225,9 @@ export default {
         // ── Notion 일정 삭제 (아카이브) ──────────────────────────────────
         case 'delete-event': {
           if (!env.NOTION_SECRET) throw new Error('Notion 미설정');
-          if (!body.pageId) throw new Error('pageId 필요');
-          const res=await notion(env,'PATCH',`/pages/${body.pageId}`,{archived:true});
-          result=await res.json();
+          // 대상이 우리 일정 DB 소속인지 확인 — 임의 pageId로 다른 Notion 페이지를 지우지 못하게
+          await assertPageInDb(env, body?.pageId, env.SCHEDULES_DB_ID);
+          await notion(env,'PATCH',`/pages/${body.pageId}`,{archived:true});
           result={ok:true};
           break;
         }
@@ -227,7 +237,7 @@ export default {
         // 재동기화해도 이 값은 보존됨. classification: '가능'|'불가'|'긴급' 또는 빈값(해제)
         case 'set-classification': {
           if (!env.NOTION_SECRET||!env.SCHEDULES_DB_ID) throw new Error('Notion 미설정');
-          if (!body.pageId) throw new Error('pageId 필요');
+          await assertPageInDb(env, body?.pageId, env.SCHEDULES_DB_ID);
           // '배포분류' 속성 보장 (없으면 생성 — idempotent, 실패해도 무시)
           await notion(env,'PATCH',`/databases/${env.SCHEDULES_DB_ID}`,
             {properties:{'배포분류':{select:{options:[{name:'가능'},{name:'불가'},{name:'긴급'}]}}}}).catch(()=>{});
@@ -272,7 +282,7 @@ export default {
         // ── 스핀 이력 삭제 (배포 취소/변경 시 우선순위 복구) ────────────
         case 'delete-spinlog': {
           if (!env.NOTION_SECRET) throw new Error('Notion 미설정');
-          if (!body?.pageId) throw new Error('pageId 필요');
+          await assertPageInDb(env, body?.pageId, env.SPINLOG_DB_ID);
           await notion(env, 'PATCH', `/pages/${body.pageId}`, {archived: true});
           result = {ok: true};
           break;
@@ -280,9 +290,19 @@ export default {
 
         case 'get-spinlog': {
           if (!env.NOTION_SECRET||!env.SPINLOG_DB_ID) throw new Error('Notion 미설정');
-          const res=await notion(env,'POST',`/databases/${env.SPINLOG_DB_ID}/query`,
-            {sorts:[{timestamp:'created_time',direction:'descending'}],page_size:200});
-          const data=await res.json();
+          // 전체 이력을 커서로 끝까지 조회. 과거엔 1페이지만 읽어, 이력이 쌓이면
+          // 오래된 기록이 창 밖으로 밀려 "한 번도 안 뽑힌 사람"으로 오분류됐다.
+          const rows=[]; let cursor;
+          for (let page=0; page<50; page++) {
+            const payload={sorts:[{timestamp:'created_time',direction:'descending'}],page_size:100};
+            if (cursor) payload.start_cursor=cursor;
+            const res=await notion(env,'POST',`/databases/${env.SPINLOG_DB_ID}/query`,payload);
+            const d=await res.json();
+            rows.push(...(d.results||[]));
+            if (!d.has_more || !d.next_cursor) break;
+            cursor=d.next_cursor;
+          }
+          const data={results:rows};
           const logs=(data.results||[]).map(p=>{
             const pr=p.properties||{};
             return {
@@ -300,7 +320,7 @@ export default {
         // ── 배정 취소: 스핀 이력을 [취소]로 표시(삭제 X) + 멤버ID 제거 → 우선순위 계산서 제외 ──
         case 'cancel-spinlog': {
           if (!env.NOTION_SECRET) throw new Error('Notion 미설정');
-          if (!body?.pageId) throw new Error('pageId 필요');
+          await assertPageInDb(env, body?.pageId, env.SPINLOG_DB_ID);
           const nm = (body.name||'').replace(/^\[취소\]\s*/,'');
           await notion(env,'PATCH',`/pages/${body.pageId}`,{properties:mapSpinProps({
             'NAME':     {title:[{text:{content:`[취소] ${nm}`}}]},
@@ -353,18 +373,20 @@ export default {
 
         // ── vtiger: 연결 테스트 ────────────────────────────────────────────
         case 'vtiger-test': {
+          if (!env.VTIGER_URL||!env.VTIGER_USERNAME||!env.VTIGER_ACCESS_KEY)
+            throw new Error('vtiger 미설정: VTIGER_URL/VTIGER_USERNAME/VTIGER_ACCESS_KEY');
           const base = (env.VTIGER_URL||'').replace(/\/$/,'');
           const testUrl = `${base}/webservice.php?operation=getchallenge&username=${encodeURIComponent(env.VTIGER_USERNAME||'')}`;
           const raw = await fetch(testUrl, {headers: VTIGER_HEADERS});
           const text = await raw.text();
+          // 설정값(URL·관리자 계정명)과 응답 원문은 노출하지 않는다 — 연결 가능 여부만 반환
           result = {
-            ok: true,
+            ok: raw.ok,
             http_status: raw.status,
-            url_called: testUrl,
-            vtiger_url_env: env.VTIGER_URL,
-            username_env: env.VTIGER_USERNAME,
-            response_preview: text.slice(0, 300),
+            reachable: raw.ok,
             is_json: text.trim().startsWith('{') || text.trim().startsWith('['),
+            hint: raw.ok ? 'vtiger 연결 정상'
+                         : 'vtiger 연결 실패 — Cloudflare IP 화이트리스트 등록 여부를 확인하세요',
           };
           break;
         }
@@ -393,64 +415,123 @@ export default {
       return new Response(JSON.stringify(result),
         {headers:{...CORS,'Content-Type':'application/json'}});
     } catch(e) {
-      return new Response(JSON.stringify({error:e.message}),
-        {status:500,headers:{...CORS,'Content-Type':'application/json'}});
+      // 상세 원인은 로그로(관측성), 응답에는 메시지만. 인증 게이트 통과자만 도달하므로 원문 노출 허용.
+      console.error(`[action:${action}]`, e && e.stack || e);
+      return new Response(JSON.stringify({ok:false, error:String(e && e.message || e)}),
+        {status:(e && e.status) || 500, headers:{...CORS,'Content-Type':'application/json'}});
     }
   },
 
   // ── Cron Trigger 핸들러 (자동 아웃룩 동기화) ──────────────────────────
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(runScheduledSync(env));
+    // 결과를 로그로 남긴다 — 과거엔 실패해도 아무 흔적이 없어 Cron이 멈춘 걸 아무도 몰랐다.
+    ctx.waitUntil((async () => {
+      const r = await runScheduledSync(env);
+      if (!r || !r.ok) console.error('[cron] 동기화 실패/부분실패:', JSON.stringify(r));
+      else             console.log('[cron] 동기화 정상:', JSON.stringify(r));
+    })());
   },
 };
 
-// ── 자동 동기화: 현재 ±4주 아웃룩 → Notion SCHEDULES_DB ──────────────────
+// ── 자동 동기화: 아웃룩 → Notion SCHEDULES_DB ────────────────────────────
+// 창(window): 과거 28일 ~ 미래 90일. 대시보드 표시 범위(-7 ~ +90일)와 맞춤.
+//   (과거엔 ±28일이라 +29~+90일 구간이 Notion에 아예 쌓이지 않았다)
+const SYNC_PAST_DAYS   = 28;
+const SYNC_FUTURE_DAYS = 90;
+let   syncInFlight     = false;   // 같은 isolate 내 중복 실행 방지 (Cron 3개 + 수동 트리거 겹침 완화)
+
 async function runScheduledSync(env) {
-  if (!env.GRAPH_CLIENT_ID || !env.NOTION_SECRET || !env.SCHEDULES_DB_ID) return;
-  const now   = new Date();
-  const start = new Date(now); start.setUTCDate(start.getUTCDate() - 28);
-  const end   = new Date(now); end.setUTCDate(end.getUTCDate() + 28);
-  const startDate = start.toISOString().slice(0,10);
-  const endDate   = end.toISOString().slice(0,10);
+  if (!env.GRAPH_CLIENT_ID || !env.NOTION_SECRET || !env.SCHEDULES_DB_ID) {
+    console.error('[sync] 환경변수 미설정으로 중단 — GRAPH_CLIENT_ID/NOTION_SECRET/SCHEDULES_DB_ID 확인 필요');
+    return {ok:false, reason:'env_missing'};
+  }
+  if (syncInFlight) { console.log('[sync] 이미 실행 중 — 건너뜀'); return {ok:false, reason:'in_flight'}; }
+  syncInFlight = true;
+
+  const kstToday = new Date(Date.now() + 9*3600*1000).toISOString().slice(0,10);  // KST 기준 오늘
+  const startDate = addDaysISO(kstToday, -SYNC_PAST_DAYS);
+  const endDate   = addDaysISO(kstToday,  SYNC_FUTURE_DAYS);
+  const stat = {created:0, updated:0, skipped:0, archived:0, errors:0, failedMembers:[]};
 
   try {
-    // 1) 아웃룩에서 새 이벤트 목록 가져오기
-    const {events: newEvents} = await syncOutlook(env, startDate, endDate);
+    // 1) 아웃룩 조회 (실패한 멤버는 failedMemberIds로 따로 추적)
+    const {events: newEvents, failed} = await syncOutlook(env, startDate, endDate);
+    stat.failedMembers = failed.map(f => f.name);
+    const failedIds = new Set(failed.map(f => f.memberId));
 
-    // 2) Notion에서 기간 내 아웃룩 이벤트 기존 목록 가져오기
+    // 2) 기간 내 기존 아웃룩 사본 수집
     const existingPages = await loadNotionEventsByRange(env, startDate, endDate, true);
-    const existingMap = {};
+    const existing = {};   // 아웃룩ID → {pageId, parsed}
     for (const p of existingPages) {
       const oid = getNotionRichText(p.properties,'아웃룩ID');
-      if (oid) existingMap[oid] = p.id;
+      if (!oid) continue;
+      if (existing[oid]) {            // 과거 동시 실행으로 생긴 중복 페이지 → 하나만 남기고 정리
+        try { await notion(env,'PATCH',`/pages/${p.id}`,{archived:true}); stat.archived++; }
+        catch(e){ stat.errors++; console.error('[sync] 중복 정리 실패', e.message); }
+        continue;
+      }
+      existing[oid] = {pageId: p.id, parsed: parseNotionSchedule(p)};
     }
 
-    // 3) Upsert: 새 이벤트 → Notion 저장
+    // 3) Upsert — 내용이 같으면 쓰지 않는다(변경 감지). Notion 호출량이 1/10 이하로 줄어
+    //    레이트리밋(초당 3건) 초과로 뒷부분이 통째로 유실되던 문제를 완화한다.
     const newOids = new Set();
     for (const ev of newEvents) {
       if (!ev.id) continue;
       newOids.add(ev.id);
       const payload = {...ev, fromOutlook:true};
-      if (existingMap[ev.id]) {
-        // 업데이트
-        await notion(env,'PATCH',`/pages/${existingMap[ev.id]}`,
-          {properties:notionScheduleProps(payload)});
-      } else {
-        // 신규 생성
-        await notion(env,'POST','/pages',
-          {parent:{database_id:env.SCHEDULES_DB_ID},properties:notionScheduleProps(payload)});
-      }
+      const hit = existing[ev.id];
+      try {
+        if (hit) {
+          if (scheduleUnchanged(hit.parsed, payload)) { stat.skipped++; continue; }
+          await notion(env,'PATCH',`/pages/${hit.pageId}`,{properties:notionScheduleProps(payload)});
+          stat.updated++;
+        } else {
+          await notion(env,'POST','/pages',
+            {parent:{database_id:env.SCHEDULES_DB_ID},properties:notionScheduleProps(payload)});
+          stat.created++;
+        }
+      } catch(e) { stat.errors++; console.error(`[sync] 저장 실패 ${ev.id}: ${e.message}`); }
     }
 
-    // 4) 기간 내 Notion에 있지만 아웃룩에 없는 이벤트 → 삭제(아카이브)
-    for (const [oid, pageId] of Object.entries(existingMap)) {
-      if (!newOids.has(oid)) {
-        await notion(env,'PATCH',`/pages/${pageId}`,{archived:true});
-      }
+    // 4) 아웃룩에서 사라진 일정 아카이브
+    //    ⚠️ 조회 실패한 멤버는 건너뛴다. 과거엔 이 단계가 실패 멤버의 일정을
+    //       수동 분류(배포분류)까지 통째로 지웠다.
+    for (const [oid, {pageId, parsed}] of Object.entries(existing)) {
+      if (newOids.has(oid)) continue;
+      if (failedIds.has(parsed?.memberId)) { stat.skipped++; continue; }
+      try { await notion(env,'PATCH',`/pages/${pageId}`,{archived:true}); stat.archived++; }
+      catch(e) { stat.errors++; console.error(`[sync] 아카이브 실패 ${oid}: ${e.message}`); }
     }
+
+    console.log(`[sync] ${startDate}~${endDate} 완료`, JSON.stringify(stat));
+    return {ok: stat.errors === 0 && failed.length === 0, range:{startDate,endDate}, ...stat};
   } catch(e) {
-    console.error('Scheduled sync error:', e.message);
+    console.error('[sync] 중단:', e && e.stack || e.message);
+    return {ok:false, reason:'exception', error:e.message, ...stat};
+  } finally {
+    syncInFlight = false;
   }
+}
+
+// 날짜 문자열(YYYY-MM-DD)에 일수 가감 — UTC 기준 계산으로 타임존 밀림 방지
+function addDaysISO(dateStr, n) {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0,10);
+}
+
+// 저장된 Notion 값과 새 아웃룩 값이 같은지 — 같으면 쓰기 생략
+function scheduleUnchanged(prev, next) {
+  if (!prev) return false;
+  return prev.title      === (next.title || '')
+      && prev.date       === (next.date || '')
+      && prev.startTime  === (next.startTime || '')
+      && prev.endTime    === (next.endTime || '')
+      && prev.type       === (next.type || 'meeting')
+      && prev.note       === (next.note || '')
+      && !!prev.isAllDay === !!next.isAllDay
+      && prev.memberId   === (next.memberId ?? null);
 }
 
 // 기간 내 Notion 이벤트 조회 (아웃룩 여부 필터 선택적)
@@ -467,7 +548,7 @@ async function loadNotionEventsByRange(env, startDate, endDate, outlookOnly=fals
   const pages = [];
   let cursor;
   while (true) {
-    const payload = {filter, page_size:200};
+    const payload = {filter, page_size:100};
     if (cursor) payload.start_cursor = cursor;
     const res  = await notion(env,'POST',`/databases/${env.SCHEDULES_DB_ID}/query`,payload);
     const data = await res.json();
@@ -490,6 +571,7 @@ async function syncOutlook(env, startDate, endDate) {
     if (!memberIds[nm])    memberIds[nm]    = eid;
   }
   const allEvents    = [];
+  const failed       = [];   // 조회 실패한 멤버 — 아카이브 대상에서 제외하기 위해 추적
   for (const [name,email] of Object.entries(memberEmails)) {
     const memberId = memberIds[name];
     if (!memberId) continue;
@@ -499,46 +581,72 @@ async function syncOutlook(env, startDate, endDate) {
         const isAllDay   = ev.isAllDay;
         const rawStartDT = ev.start?.dateTime||'';
         const rawEndDT   = ev.end?.dateTime||'';
-        if (!rawStartDT) continue;
+        if (!rawStartDT || !ev.id) continue;
         const startDT = toKST(rawStartDT, ev.start?.timeZone||'UTC');
-        const endDT   = toKST(rawEndDT,   ev.end?.timeZone||'UTC');
+        // 종료시각이 없거나 깨진 경우 시작일 기준으로 보정 (과거엔 이벤트가 통째로 누락됐다)
+        const endDT   = rawEndDT ? toKST(rawEndDT, ev.end?.timeZone||'UTC') : startDT;
         const startDay = startDT.slice(0,10);
-        let lastDay = endDT.slice(0,10);
+        let lastDay = (endDT.slice(0,10) || startDay);
         if (isAllDay && lastDay>startDay) {
-          const d=new Date(lastDay+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()-1);
-          lastDay=d.toISOString().slice(0,10);
+          // 종일 일정의 end는 exclusive(다음 날 00:00) → 하루 빼서 실제 마지막 날로
+          lastDay=addDaysISO(lastDay,-1);
+        } else if (!isAllDay && lastDay>startDay && endDT.slice(11,16)==='00:00') {
+          // 자정에 끝나는 시간제 일정이 다음 날까지 유령으로 번지던 문제 보정
+          lastDay=addDaysISO(lastDay,-1);
         }
+        if (lastDay<startDay) lastDay=startDay;
         const sTime = isAllDay?'09:00':startDT.slice(11,16);
         const eTime = isAllDay?'18:00':endDT.slice(11,16);
-        const cur=new Date(startDay+'T00:00:00Z'), fin=new Date(lastDay+'T00:00:00Z');
-        let dayIdx=0;
-        while (cur<=fin && dayIdx<365) {
-          const ds=cur.toISOString().slice(0,10);
-          if (ds>=startDate && ds<=endDate)
-            allEvents.push({
-              id:`ol_${memberId}_${ds}_${ev.id.slice(-16)}`,
-              memberId, date:ds,
-              title:(isAllDay?'🌐 ':'')+(ev.subject||'(제목 없음)'),
-              startTime:sTime, endTime:eTime,
-              type:classifyEventType(ev.showAs, ev.subject),
-              note:ev.bodyPreview||'',
-              fromOutlook:true, isAllDay,
-              outlookId:`ol_${memberId}_${ds}_${ev.id.slice(-16)}`,
-            });
-          cur.setUTCDate(cur.getUTCDate()+1); dayIdx++;
+        const multiDay = lastDay>startDay;
+        // 조회 창 안쪽만 순회 — 과거엔 아주 오래 전에 시작한 장기 일정이
+        // 365회 가드를 다 쓰고도 창에 도달하지 못해 통째로 사라졌다.
+        let ds = startDay < startDate ? startDate : startDay;
+        const until = lastDay > endDate ? endDate : lastDay;
+        for (let i=0; ds<=until && i<400; i++, ds=addDaysISO(ds,1)) {
+          // ⚠️ 아웃룩ID 뒤 16자만 사용 — 기존 Notion 페이지와의 호환을 위해 유지한다.
+          //    (형식을 바꾸면 기존 사본이 전부 아카이브되고 수동 분류가 소실됨)
+          //    같은 멤버·같은 날 뒤 16자가 겹치면 충돌 가능하나 확률은 매우 낮음.
+          const oid=`ol_${memberId}_${ds}_${ev.id.slice(-16)}`;
+          allEvents.push({
+            id:oid,
+            memberId, date:ds,
+            title:(isAllDay?'🌐 ':'')+(ev.subject||'(제목 없음)'),
+            // 여러 날에 걸친 시간제 일정은 중간 날의 시간대를 알 수 없다.
+            // 과거엔 첫날 시간(예: 14:00~18:00)을 모든 날에 복제해, 중간 날 오전이
+            // 비어 보여 "가능"으로 오판됐다. 이제 중간 날은 하루 전체로 처리한다.
+            startTime: multiDay && !isAllDay ? (ds===startDay ? sTime : '09:00') : sTime,
+            endTime:   multiDay && !isAllDay ? (ds===until    ? eTime : '18:00') : eTime,
+            isAllDay:  isAllDay || (multiDay && !isAllDay && ds!==startDay && ds!==until),
+            type:classifyEventType(ev.showAs, ev.subject),
+            note:ev.bodyPreview||'',
+            fromOutlook:true,
+            outlookId:oid,
+          });
         }
       }
     } catch(e) {
-      allEvents.push({id:`err_${name}`,memberId,date:startDate,
-        title:`[오류] ${e.message}`,startTime:'00:00',endTime:'00:01',
-        type:'meeting',fromOutlook:true});
+      // ⚠️ 과거엔 가짜 '[오류]' 이벤트를 넣었다. 그러면 이 멤버의 실제 일정 ID가 newOids에 없어
+      //    동기화 4단계가 그 사람의 기존 Notion 일정을 전부 아카이브(= 수동 분류까지 삭제)했다.
+      //    이제는 실패한 멤버를 기록해 두고, 아카이브 대상에서 통째로 제외한다.
+      console.error(`[syncOutlook] ${name}(${email}) 조회 실패: ${e.message}`);
+      failed.push({ memberId, name, error: e.message });
     }
   }
-  return {ok:true, events:allEvents, count:allEvents.length};
+  return {ok:true, events:allEvents, count:allEvents.length,
+          failed, failedMemberIds:failed.map(f=>f.memberId)};
 }
 
 // ── Graph Token ───────────────────────────────────────────────────────────
+// 토큰은 보통 1시간 유효. 과거엔 요청마다 재발급해 외부 호출 1건과 지연을 낭비했다.
+let graphTokenCache = { token: null, expiresAt: 0 };
+
 async function getGraphToken(env) {
+  if (graphTokenCache.token && Date.now() < graphTokenCache.expiresAt) return graphTokenCache.token;
+  const token = await fetchGraphToken(env);
+  return token;
+}
+
+async function fetchGraphToken(env) {
   if (!env.GRAPH_CLIENT_ID||!env.GRAPH_TENANT_ID||!env.GRAPH_CLIENT_SECRET)
     throw new Error('환경변수 미설정: GRAPH_CLIENT_ID/GRAPH_TENANT_ID/GRAPH_CLIENT_SECRET');
   const res=await fetch(
@@ -550,54 +658,142 @@ async function getGraphToken(env) {
        grant_type:'client_credentials'}).toString()});
   if (!res.ok){const e=await res.json().catch(()=>({}));
     throw new Error(`토큰 취득 실패: ${e.error_description||e.error||res.status}`);}
-  return (await res.json()).access_token;
+  const data=await res.json();
+  // 만료 60초 전에 갱신되도록 여유를 둔다
+  graphTokenCache={token:data.access_token,
+    expiresAt:Date.now()+Math.max(0,(Number(data.expires_in)||3600)-60)*1000};
+  return data.access_token;
 }
 
 // ── Calendar Events ───────────────────────────────────────────────────────
+// 기간 내 캘린더 일정 전체 조회.
+// ⚠️ calendarView는 $top을 넘으면 @odata.nextLink로 이어진다. 과거엔 이를 따라가지 않아
+//    500건 초과 시 뒷날짜가 조용히 잘렸고 → "일정 없음 = 가용"으로 오판하는 원인이었다.
 async function getCalendarEvents(token,email,startDate,endDate) {
   const params=new URLSearchParams({
-    startDateTime:`${startDate}T00:00:00Z`,endDateTime:`${endDate}T15:00:00Z`,
-    $select:'id,subject,start,end,showAs,bodyPreview,isAllDay',$top:'500'});
-  const res=await fetch(`${GRAPH_BASE}/users/${email}/calendarView?${params}`,
-    {headers:{'Authorization':`Bearer ${token}`,'Prefer':'outlook.timezone="Korea Standard Time"'}});
-  if (!res.ok){const e=await res.json().catch(()=>({}));
-    throw new Error(e?.error?.message||`HTTP ${res.status}`);}
-  return (await res.json()).value||[];
+    // KST 오프셋을 명시 — 과거 'T00:00:00Z'는 KST 09:00이라 첫날 오전 일정이 누락됐다
+    startDateTime:`${startDate}T00:00:00+09:00`,
+    endDateTime:`${endDate}T23:59:59+09:00`,
+    $select:'id,subject,start,end,showAs,bodyPreview,isAllDay',$top:'250'});
+  let url=`${GRAPH_BASE}/users/${email}/calendarView?${params}`;
+  const all=[];
+  for (let page=0; url && page<40; page++) {   // 최대 1만 건 가드 (무한 루프 방지)
+    const res=await fetch(url,
+      {headers:{'Authorization':`Bearer ${token}`,'Prefer':'outlook.timezone="Korea Standard Time"'}});
+    if (!res.ok){const e=await res.json().catch(()=>({}));
+      throw new Error(e?.error?.message||`HTTP ${res.status}`);}
+    const data=await res.json();
+    all.push(...(data.value||[]));
+    url=data['@odata.nextLink']||null;
+  }
+  return all;
 }
 
-function mapShowAs(s){return (s==='oof'||s==='workingElsewhere')?'out':'meeting';}
-
-// 이벤트 제목 기반 타입 분류 (showAs 우선, 키워드 보완)
-const OUT_KEYWORDS  = ['연차','반차','휴가','외근','출장','재택','공휴일','경조','병가','조퇴'];
+// 이벤트 제목 기반 타입 분류 (화면 색상용). 가용/불가 판정은 프론트의 classifyAvailability가 담당.
+// ⚠️ OUT_KEYWORDS는 index.html과 동일하게 유지할 것 — 과거 두 파일의 목록이 달라 규칙이 갈렸다.
+const OUT_KEYWORDS  = ['연차','반차','휴가','외근','출장','재택','공휴일','경조','병가','조퇴','OOF','부재중'];
 const DEPLOY_KEYWORDS = ['배포','deploy'];
 
-const MEETING_EXCEPTIONS = ['배포회의', '[내부업무]', '[내부]'];  // 배포 키워드가 있어도 회의로 분류
+const MEETING_EXCEPTIONS = ['배포회의', '[내부업무]', '[내부]'];  // 배포/부재 키워드가 있어도 회의로 분류
 
 function classifyEventType(showAs, title) {
   const t = (title||'').toLowerCase();
   if (showAs === 'oof' || showAs === 'workingElsewhere') return 'out';
-  if (OUT_KEYWORDS.some(k => t.includes(k))) return 'out';
+  // 예외 먼저 — '[내부업무] 재택 코드리뷰'가 '재택'에 걸려 out이 되던 순서 역전 수정
   if (MEETING_EXCEPTIONS.some(k => t.includes(k))) return 'meeting';
+  if (OUT_KEYWORDS.some(k => t.includes(k.toLowerCase()))) return 'out';
   if (DEPLOY_KEYWORDS.some(k => t.includes(k))) return 'deploy';
   return 'meeting';
 }
 
+// Graph 응답 시각을 KST 벽시계 문자열로 변환.
+// Prefer 헤더로 KST를 요청하므로 대개 'Korea Standard Time'으로 돌아온다.
+// ⚠️ 그 외 타임존 이름(예: 'Pacific Standard Time')이 오면 오프셋을 알 수 없어
+//    UTC로 간주하던 과거 동작은 시각을 어긋나게 만든다 → 이제 명시적으로 처리한다.
 function toKST(dtStr,timeZone){
   if (!dtStr) return '';
   if (timeZone==='Korea Standard Time') return dtStr;
   try {
-    const iso=(dtStr.includes('Z')||dtStr.includes('+'))?dtStr:dtStr+'Z';
-    const d=new Date(iso); d.setUTCHours(d.getUTCHours()+9);
-    return d.toISOString().slice(0,19);
+    const hasOffset = dtStr.includes('Z') || /[+-]\d{2}:\d{2}$/.test(dtStr);
+    if (hasOffset) {                       // 절대시각이므로 정확히 KST로 환산 가능
+      const d=new Date(dtStr); d.setUTCHours(d.getUTCHours()+9);
+      return d.toISOString().slice(0,19);
+    }
+    if (timeZone==='UTC' || !timeZone) {   // 오프셋 없는 UTC 표기
+      const d=new Date(dtStr+'Z'); d.setUTCHours(d.getUTCHours()+9);
+      return d.toISOString().slice(0,19);
+    }
+    // 오프셋도 없고 KST/UTC도 아닌 타임존 → 변환 불가. 원문을 그대로 쓰고 경고만 남긴다
+    // (임의로 +9를 더하면 그 오프셋만큼 일정이 어긋난다)
+    console.warn(`[toKST] 변환 불가 타임존: ${timeZone} — 원문 사용`);
+    return dtStr;
   } catch(_){return dtStr;}
 }
 
+// ── 공통 유틸 ─────────────────────────────────────────────────────────────
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// 길이 노출을 줄인 상수시간 비교 (타이밍 공격 완화)
+function safeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  let diff = a.length ^ b.length;
+  const n = Math.max(a.length, b.length);
+  for (let i = 0; i < n; i++) diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+  return diff === 0;
+}
+
+// 메일/캘린더 본문에 들어가는 사용자 입력 이스케이프 (HTML 인젝션 차단)
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g,
+    c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+}
+
 // ── Notion Helpers ────────────────────────────────────────────────────────
-function notion(env,method,path,body){
-  return fetch(`https://api.notion.com/v1${path}`,{method,
-    headers:{'Authorization':`Bearer ${env.NOTION_SECRET}`,
-      'Notion-Version':'2022-06-28','Content-Type':'application/json'},
-    body:body?JSON.stringify(body):undefined});
+// Notion은 평균 초당 3요청 제한. 429/5xx는 Retry-After를 존중해 지수 백오프 재시도하고,
+// 그 외 실패는 throw → 호출부가 "조용히 성공한 것처럼" 넘어가지 않도록 한다.
+async function notion(env, method, path, body, opts = {}) {
+  const maxRetry = opts.maxRetry ?? 3;
+  for (let attempt = 0; ; attempt++) {
+    let res;
+    try {
+      res = await fetch(`https://api.notion.com/v1${path}`, {
+        method,
+        headers: { 'Authorization': `Bearer ${env.NOTION_SECRET}`,
+          'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    } catch (netErr) {
+      if (attempt >= maxRetry) throw new Error(`Notion 네트워크 오류: ${netErr.message}`);
+      await sleep(Math.min(4000, 300 * 2 ** attempt));
+      continue;
+    }
+    if (res.ok) return res;
+    const retryable = res.status === 429 || res.status === 409 || res.status >= 500;
+    if (retryable && attempt < maxRetry) {
+      const ra = Number(res.headers.get('Retry-After'));
+      await sleep(ra > 0 ? ra * 1000 : Math.min(4000, 300 * 2 ** attempt));
+      continue;
+    }
+    const detail = await res.json().catch(() => ({}));
+    const err = new Error(`Notion ${method} ${path} 실패 (${res.status}) ${detail.message || ''}`.trim());
+    err.status = res.status;
+    throw err;
+  }
+}
+
+// 페이지가 지정한 데이터베이스 소속인지 확인 — 임의 pageId 삭제/변조 방지
+async function assertPageInDb(env, pageId, dbId) {
+  if (!pageId) throw new Error('pageId 필요');
+  if (!dbId)   throw new Error('대상 DB 미설정');
+  const res  = await notion(env, 'GET', `/pages/${pageId}`);
+  const page = await res.json();
+  const parent = page?.parent?.database_id || '';
+  if (parent.replace(/-/g, '') !== String(dbId).replace(/-/g, '')) {
+    const err = new Error('이 시스템이 관리하지 않는 페이지입니다');
+    err.status = 403;
+    throw err;
+  }
+  return page;
 }
 
 // Notion 페이지 → JS 이벤트 객체
@@ -618,6 +814,7 @@ function parseNotionSchedule(page) {
     isAllDay:   p['하루종일']?.checkbox||false,
     outlookId:  getNotionRichText(p,'아웃룩ID'),
     classification: p['배포분류']?.select?.name || null,  // 수동 분류 (가능/불가/긴급) — 모두 공유
+    spinLogPageId:  getNotionRichText(p,'스핀로그ID') || null,  // 배정↔스핀이력 연결(모든 PC 공유)
   };
 }
 
@@ -635,7 +832,23 @@ function notionScheduleProps(d) {
     '하루종일': {checkbox:!!d.isAllDay},
     '아웃룩ID': {rich_text:[{text:{content:d.outlookId||d.id||''}}]},
   };
+  // 배정↔스핀이력 연결 고리. 과거엔 이 값이 각 PC의 localStorage에만 있어서,
+  // 다른 PC에서 배정을 취소하면 우선순위가 복구되지 않았다.
+  if (d.spinLogPageId !== undefined) {
+    props['스핀로그ID'] = {rich_text:[{text:{content:d.spinLogPageId||''}}]};
+  }
   return props;
+}
+
+// SCHEDULES_DB에 '스핀로그ID' 속성이 없으면 1회 추가 (nullable 텍스트 — 기존 데이터 영향 없음)
+let spinLogPropEnsured = false;
+async function ensureSpinLogProp(env) {
+  if (spinLogPropEnsured || !env.SCHEDULES_DB_ID) return;
+  try {
+    await notion(env,'PATCH',`/databases/${env.SCHEDULES_DB_ID}`,
+      {properties:{'스핀로그ID':{rich_text:{}}}});
+    spinLogPropEnsured = true;
+  } catch(e) { console.error('[schema] 스핀로그ID 속성 추가 실패:', e.message); }
 }
 
 function getNotionText(props,key){return props[key]?.title?.[0]?.text?.content||'';}

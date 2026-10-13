@@ -1,0 +1,44 @@
+name = "deploycalendar"
+main = "cloudflare-worker.js"
+compatibility_date = "2025-09-01"
+account_id = "432a7fd8cfc5ec28c1ea7fdf035c47f3"
+
+# ── 관측성 ────────────────────────────────────────────────────────────────
+# Cron 동기화 실패를 사후에 확인하려면 로그가 남아야 한다.
+# 대시보드 → Workers → deploycalendar → Logs 에서 조회. 실시간은 `wrangler tail deploycalendar`.
+[observability]
+enabled = true
+
+[observability.logs]
+head_sampling_rate = 1
+
+# ── Cron Triggers (KST = UTC+9) ───────────────────────────────────────────
+# KST 07:00 = UTC 22:00 (전날)
+# KST 12:30 = UTC 03:30
+# KST 15:00 = UTC 06:00
+[triggers]
+crons = ["0 22 * * *", "30 3 * * *", "0 6 * * *"]
+
+# ── ⚠️ 배포 시 반드시 --keep-vars 를 붙일 것 ─────────────────────────────
+#   npx wrangler deploy --keep-vars
+#
+#   아래 [vars] 블록이 주석 처리되어 있으므로, --keep-vars 없이 배포하면
+#   Cloudflare 대시보드에 등록된 환경변수가 전부 삭제되고 자동 동기화가
+#   조용히 멈춘다. (과거 실제로 발생한 것으로 추정되는 장애)
+#
+# ── 환경변수 (평문) ── 시크릿은 아래 명령어로 별도 설정 ─────────────────
+# wrangler secret put APP_PASSWORD        ← 접근 비밀번호 (필수. 미설정 시 503)
+# wrangler secret put GRAPH_CLIENT_SECRET
+# wrangler secret put NOTION_SECRET
+# wrangler secret put VTIGER_ACCESS_KEY
+#
+# [vars]
+# GRAPH_CLIENT_ID     = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+# GRAPH_TENANT_ID     = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+# MEMBER_EMAILS       = '{"이송민":"a@softcamp.co.kr","이하영":"b@softcamp.co.kr","강진혁":"c@softcamp.co.kr","김선우":"d@softcamp.co.kr","김요엘":"e@softcamp.co.kr"}'
+# MEMBER_IDS          = '{"이송민":1,"이하영":2,"강진혁":3,"김선우":4,"김요엘":5}'
+# SCHEDULES_DB_ID     = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+# SPINLOG_DB_ID       = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+# VTIGER_URL          = "https://your-vtiger-domain.com"
+# VTIGER_USERNAME     = "admin"
+# VTIGER_MEMBER_IDS   = '{"이송민":"19x5","이하영":"19x6","강진혁":"19x7","김선우":"19x8","김요엘":"19x9"}'

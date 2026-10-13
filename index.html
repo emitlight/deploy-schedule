@@ -989,7 +989,7 @@
       </div>
       <div class="rr-unavail-reasons" id="rrUnavailReasons"></div>
       <div class="rr-rule-note">
-        🔄 최근에 뽑힌 사람은 자동으로 <strong>후순위</strong>로 밀립니다
+        🎲 배포 가능한 인원 중 <strong>동일한 확률</strong>로 추첨합니다 · 배정 이력은 📋 스핀 이력에 기록됩니다
       </div>
       <div class="wheel-wrap">
         <div class="wheel-pointer">▼</div>
@@ -1061,8 +1061,9 @@
 // 기본값 = 운영 Worker (미설정 PC도 공유 데이터에 바로 접속 — PC마다 다르게 보이던 원인 중 하나)
 const WORKER_URL = localStorage.getItem('workerUrl') || 'https://deploycalendar.hayoung-lee.workers.dev';
 
-// ── Worker 호출 보안: 접근 비밀번호(X-Auth) 자동 첨부 + 401 시 재입력 ──
-// Worker에 APP_PASSWORD를 설정한 경우에만 서버가 검사함 → 미설정이면 동작 변화 없음(안전).
+// ── Worker 호출 보안: 접근 비밀번호(X-Auth) 자동 첨부 + 401 재입력 / 503 안내 ──
+// 서버는 APP_PASSWORD 미설정 시 503(fail-closed)으로 전면 차단한다.
+let authPromptOpen = false;   // 여러 요청이 동시에 401을 받아도 프롬프트는 1회만
 (function () {
   const _origFetch = window.fetch.bind(window);
   window.fetch = async function (input, init) {
@@ -1074,9 +1075,15 @@ const WORKER_URL = localStorage.getItem('workerUrl') || 'https://deploycalendar.
       if (pw) init.headers = Object.assign({}, init.headers, { 'X-Auth': pw });
     }
     const res = await _origFetch(input, init);
-    if (isWorker && res.status === 401) {
+    if (isWorker && res.status === 401 && !authPromptOpen) {
+      authPromptOpen = true;
       const pw = prompt('🔑 이 대시보드 접근 비밀번호를 입력하세요 (관리자에게 문의)');
       if (pw) { localStorage.setItem('appPassword', pw); location.reload(); }
+      else    { localStorage.removeItem('appPassword'); authPromptOpen = false; }
+    }
+    if (isWorker && res.status === 503) {
+      // 서버에 APP_PASSWORD가 아직 설정되지 않은 상태 — 관리자 조치 필요
+      try { showToast('⚠️ 서버 설정 미완료 — 관리자에게 APP_PASSWORD 설정을 요청하세요'); } catch(_) {}
     }
     return res;
   };
@@ -1718,17 +1725,28 @@ function saveDeployEvent() {
   });
 
   // 모든 배정을 공유 스핀 이력 DB에 반드시 기록 (룰렛/직접투입 공통)
-  if (spinLogPromise) {
+  // ⚠️ 아래 분기 판단 후에는 반드시 상태를 비운다(함수 말미 finally). 과거엔 비우지 않아
+  //    룰렛 1회 뒤 직접 투입을 하면 ① 이력이 안 남고 ② 우선순위도 안 밀리고
+  //    ③ 직전 당첨자의 이력 ID를 물려받아 삭제 시 엉뚱한 사람 기록이 지워졌다.
+  const usedSpinPromise = spinLogPromise;
+  const usedSpinPageId  = lastSpinLogPageId;
+  spinLogPromise = null;
+  lastSpinLogPageId = null;
+
+  if (usedSpinPromise) {
     // 룰렛 경로: add-spinlog 응답이 늦게 오면 첫 이벤트에 소급 반영 (배포 취소 시 우선순위 복구용)
     if (!created[0].spinLogPageId) {
-      spinLogPromise.then(id => {
+      usedSpinPromise.then(id => {
         if (id) {
           const i = events.findIndex(x => x.id === created[0].id);
-          if (i !== -1) { events[i].spinLogPageId = id; saveDataLocal(); }
+          if (i !== -1) {
+            events[i].spinLogPageId = id; saveDataLocal();
+            saveEventToNotion(events[i]);   // 연결고리를 Notion에도 반영 → 다른 PC에서도 취소 가능
+          }
         }
       });
     }
-  } else if (!lastSpinLogPageId && WORKER_URL) {
+  } else if (!usedSpinPageId && WORKER_URL) {
     // 직접 투입(룰렛 미사용): 스핀 이력이 없으므로 여기서 생성 → 공유 DB에 배정 기록 + 우선순위 반영
     advanceRrOrder(memberId);
     const spunAt = new Date().toLocaleString('ko-KR');
@@ -1741,7 +1759,10 @@ function saveDeployEvent() {
     .then(d => {
       if (d.ok && d.pageId) {
         const i = events.findIndex(x => x.id === created[0].id);
-        if (i !== -1) { events[i].spinLogPageId = d.pageId; saveDataLocal(); }
+        if (i !== -1) {
+          events[i].spinLogPageId = d.pageId; saveDataLocal();
+          saveEventToNotion(events[i]);   // 연결고리를 Notion에도 반영
+        }
         loadRrOrderFromNotion();
       }
     })
@@ -2137,9 +2158,17 @@ let spinLogPromise    = null;  // add-spinlog 요청 Promise (pageId 소급 반�
 // ── 라운드로빈 순서 관리 ──────────────────────────────────────────────────
 // 앞쪽 = 다음 차례(가장 오래 안 뽑힌), 뒤쪽 = 최근 선정
 // Notion 스핀 이력 기반으로 로드, 없으면 localStorage 폴백
+// ⚠️ 과거엔 `s.length === pool().length` 가드를 써서, 추가 인원 토글을 켜고 끌 때마다
+//    길이가 어긋나 공정성 이력이 통째로 초기화됐다. 이제 길이와 무관하게 보존하고,
+//    빠진 멤버만 뒤에 덧붙인다(순서 = 우선순위이므로 신규 인원은 후순위가 아닌 선순위가 맞지만,
+//    Notion 재구성(loadRrOrderFromNotion)이 곧 덮어쓰므로 여기선 안전한 기본값만 둔다).
 let rrOrder = (() => {
-  const s = JSON.parse(localStorage.getItem('rrOrder') || 'null');
-  return (s && s.length === pool().length) ? s : pool().map(m => m.id);
+  const saved = JSON.parse(localStorage.getItem('rrOrder') || 'null');
+  const ids = ALL().map(m => m.id);
+  if (!Array.isArray(saved) || saved.length === 0) return pool().map(m => m.id);
+  const kept = saved.filter(id => ids.includes(id));          // 사라진 멤버 제거
+  const added = ids.filter(id => !kept.includes(id));         // 새 멤버는 앞(=우선)에
+  return [...added, ...kept];
 })();
 function saveRrOrder() { localStorage.setItem('rrOrder', JSON.stringify(rrOrder)); }
 function advanceRrOrder(winnerId) {
@@ -2164,14 +2193,16 @@ async function loadRrOrderFromNotion() {
     if (!Array.isArray(logs) || logs.length === 0) return;
 
     // 각 멤버의 마지막 선정 시각 추출 (createdTime 기준 내림차순 정렬된 결과에서 첫 등장)
+    // [취소]·[초기화] 로그는 멤버ID가 없으므로 자연히 제외된다
     const lastPickTime = {}; // memberId → ISO createdTime
     for (const log of logs) {
       const id = log.memberId || ALL().find(m => m.name === log.name)?.id;
       if (id && !(id in lastPickTime)) lastPickTime[id] = log.createdTime;
     }
 
-    // 한 번도 안 뽑힌 멤버 = 가장 오래됨(우선순위 최상)
-    const neverPicked = pool().filter(m => !(m.id in lastPickTime)).map(m => m.id);
+    // ⚠️ 기준을 ALL()로 통일한다. 과거엔 neverPicked만 pool()을 써서, 추가 인원을 끈 상태에서
+    //    과거 배정 이력이 있으면 배열 길이가 어긋나 다음 로드 때 순서가 리셋됐다.
+    const neverPicked = ALL().filter(m => !(m.id in lastPickTime)).map(m => m.id);
     // 뽑힌 멤버 = 마지막 선정 시각 오름차순 (오래된 순 = 높은 우선순위)
     const pickedSorted = Object.entries(lastPickTime)
       .sort(([, a], [, b]) => a < b ? -1 : 1)
@@ -2463,11 +2494,17 @@ function renderAvailableMembers() {
 
     let conflictTxt = '';
     if (!avail) {
+      // ⚠️ 과거엔 '달력에서 선택한 날'을 봤다. 배포 기간이 다른 주면 충돌 내역이 비어
+      //    툴팁에 "충돌: "만 뜨는 문제가 있었다. 이제 배포 기간 기준으로 조회한다.
       const cs = events.filter(e =>
-        e.memberId === m.id && e.date === dateStr &&
-        eventsOverlap(depStart, depEnd, e.startTime, e.endTime)
+        e.memberId === m.id &&
+        e.date >= depDateStart2 && e.date <= depDateEnd2 &&
+        (e.isAllDay || eventsOverlap(depStart, depEnd, e.startTime, e.endTime)) &&
+        !isFreeTimeEvent(e)
       );
-      conflictTxt = cs.map(e => `${e.startTime}~${e.endTime}`).join(', ');
+      conflictTxt = cs.slice(0, 3)
+        .map(e => `${e.date.slice(5).replace('-', '/')} ${e.isAllDay ? '종일' : e.startTime + '~' + e.endTime}`)
+        .join(', ') + (cs.length > 3 ? ` 외 ${cs.length - 3}건` : '');
     }
     return `<div class="rr-item ${avail ? 'avail' : 'unavail'}"
       title="${avail ? (urgent ? '⚠️ 가능하나 긴급 업무 중 — 신중 판단' : '배포 가능') : '충돌: ' + conflictTxt}">
@@ -2785,12 +2822,30 @@ async function rebuildSpinlogFromLocal() {
   showToast(`✅ 재구성 완료 — 잘못된 복원 ${removed}건 삭제, 실제 배정 ${created}건 기록`);
 }
 
-function resetPickHistory() {
-  if (!confirm('스핀 이력을 전체 삭제할까요?')) return;
+// ⚠️ 과거엔 화면에 보이지 않는 로컬 기록(pickHistory)만 지워서, 확인창을 수락하고
+//    "삭제되었습니다" 토스트가 떠도 목록이 그대로였다(화면은 Notion 공유 이력을 렌더).
+//    이제 공유 이력을 실제로 삭제한다 — 되돌릴 수 없으므로 경고를 강화했다.
+async function resetPickHistory() {
+  const logs = (notionSpinLog || []);
+  if (logs.length === 0) { showToast('삭제할 이력이 없습니다'); return; }
+  if (!confirm(
+    `공유 스핀 이력 ${logs.length}건을 모두 삭제합니다.\n\n` +
+    `· 모든 사용자에게 반영됩니다\n` +
+    `· 되돌릴 수 없습니다\n` +
+    `· 배정 우선순위와 통계가 초기화됩니다\n\n` +
+    `정말 진행할까요?`)) return;
+  if (!confirm('마지막 확인입니다. 공정성 이력이 사라집니다. 계속할까요?')) return;
+
+  let ok = 0, failed = 0;
+  for (const l of logs) {
+    try { await workerPost('delete-spinlog', { pageId: l.id }); ok++; }
+    catch (_) { failed++; }
+  }
   pickHistory = [];
   localStorage.setItem('pickHistory', JSON.stringify(pickHistory));
+  await loadRrOrderFromNotion();
   renderHistory();
-  showToast('스핀 이력이 삭제되었습니다');
+  showToast(failed ? `이력 ${ok}건 삭제, ${failed}건 실패` : `스핀 이력 ${ok}건이 삭제되었습니다`);
 }
 
 function switchTab(tab) {
