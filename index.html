@@ -973,10 +973,10 @@
       <!-- 배포 예정 시간 설정 -->
       <div class="dep-time-row">
         <span class="dep-time-label">📅 배포 기간</span>
-        <input type="date" id="rDepDateStart" onchange="refreshRoulette()"
+        <input type="date" id="rDepDateStart" onchange="onRouletteRangeChange()"
           style="border:1px solid #c5cae9;border-radius:6px;padding:4px 8px;font-size:12px;color:#1a237e;" />
         <span style="color:#aaa;font-size:12px;">~</span>
-        <input type="date" id="rDepDateEnd" onchange="refreshRoulette()"
+        <input type="date" id="rDepDateEnd" onchange="onRouletteRangeChange()"
           style="border:1px solid #c5cae9;border-radius:6px;padding:4px 8px;font-size:12px;color:#1a237e;" />
         <select id="rDepStart" onchange="refreshRoulette()"></select>
         <span style="color:#aaa;font-size:12px;">~</span>
@@ -1058,7 +1058,8 @@
 <script>
 // ─── Cloudflare Worker 설정 ──────────────────────────────────────────────────
 // ✏️ Cloudflare Worker 배포 후 아래 URL을 교체하세요
-const WORKER_URL = localStorage.getItem('workerUrl') || '';
+// 기본값 = 운영 Worker (미설정 PC도 공유 데이터에 바로 접속 — PC마다 다르게 보이던 원인 중 하나)
+const WORKER_URL = localStorage.getItem('workerUrl') || 'https://deploycalendar.hayoung-lee.workers.dev';
 
 // ── Worker 호출 보안: 접근 비밀번호(X-Auth) 자동 첨부 + 401 시 재입력 ──
 // Worker에 APP_PASSWORD를 설정한 경우에만 서버가 검사함 → 미설정이면 동작 변화 없음(안전).
@@ -1542,17 +1543,17 @@ function applyTagOverride() {
   saveTagOverrides(); saveDataLocal(); render();
   const label = { available:'✅ 가능', blocking:'⛔ 불가', urgent:'⚠️ 긴급', auto:'🏷️ 자동(태그 기반)' }[v] || v;
   showToast(`배포지원 분류: ${label}`);
-  // Notion 저장 (다른 사람에게도 반영) — Notion 페이지(pageId) 있을 때만
-  if (WORKER_URL && ev.pageId) {
-    fetch(WORKER_URL, {
-      method:'POST', headers:{'Content-Type':'application/json','X-Action':'set-classification'},
-      body: JSON.stringify({ pageId: ev.pageId, classification: v === 'auto' ? null : CLS_TO_KR[v] }),
-    })
-    .then(r => r.json())
-    .then(d => { if (!d.ok) showToast('⚠️ Notion 저장 실패 — 로컬만 반영됨'); })
-    .catch(() => showToast('⚠️ Notion 저장 실패(네트워크) — 로컬만 반영됨'));
-  } else if (!ev.pageId) {
-    showToast('ℹ️ Notion 미저장 일정 — 동기화 후 공유됩니다');
+  // Notion 저장 (다른 사람에게도 반영) — Notion 페이지가 없으면 먼저 생성 후 분류 저장
+  if (WORKER_URL) {
+    (async () => {
+      if (!ev.pageId) {
+        const saved = await saveEventToNotion(ev);
+        if (!saved.pageId) throw new Error('page');
+        ev.pageId = saved.pageId; saveDataLocal();
+      }
+      const d = await workerPost('set-classification', { pageId: ev.pageId, classification: v === 'auto' ? null : CLS_TO_KR[v] });
+      if (!d.ok) throw new Error('cls');
+    })().catch(() => showToast('⚠️ Notion 저장 실패 — 이 PC에만 반영됨 (프록시 확인)'));
   }
 }
 function saveEvent() {
@@ -1899,26 +1900,100 @@ function toggleFreeSlots() {
 function saveDataLocal() { localStorage.setItem('scheduleEvents', JSON.stringify(events)); }
 function saveData() { saveDataLocal(); }  // 하위호환 alias
 
-// ── Notion에서 모든 이벤트 로드 (앱 시작 + 수동 동기화 후) ──────────────
-async function loadEventsFromNotion() {
-  // 이미 로컬에 데이터가 있으면 Notion 로드 생략 (덮어쓰기 방지)
-  if (!WORKER_URL || events.length > 0) return;
-  try {
-    const res = await fetch(WORKER_URL, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Action': 'load-events' },
-      body:    '{}',
+// ── 공유 데이터 동기화 (모든 PC가 같은 데이터를 보도록) ──────────────────
+// 기존 문제: PC별 localStorage에만 일정이 쌓이고, Notion은 로컬이 비었을 때만 로드 → PC마다 다르게 보임
+// 변경: 열 때마다 ① Notion(배정·수동분류, 공유 원본) + ② 아웃룩 직접 조회(필요 기간) 를 받아 병합
+//  - 아웃룩 일정: 아웃룩 직접 조회 결과 우선 (Notion 사본은 자동 동기화 지연으로 오래됐을 수 있음)
+//  - 수동 분류(가능/불가/긴급)·pageId: Notion 값을 아웃룩ID 기준으로 붙임
+//  - 로컬 전용 필드(spinLogPageId 등)는 같은 id의 로컬 값 유지
+const SYNC_AHEAD_DAYS = 90;          // 앞으로 3개월치 아웃룩 일정 조회
+let outlookCoverage = null;           // 이번 세션에서 아웃룩 직접 조회한 범위 {start, end}
+
+function addDaysStr(dateStr, n) {
+  const d = new Date(dateStr + 'T00:00:00Z');  // UTC 기준 (타임존 버그 방지)
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+async function workerPost(action, body) {
+  const res = await fetch(WORKER_URL, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Action': action },
+    body:    JSON.stringify(body || {}),
+  });
+  if (!res.ok) throw new Error(`Worker 오류 ${res.status}`);
+  return res.json();
+}
+
+function mergeSharedEvents(notionEvs, outlookEvs, range) {
+  const localById = new Map(events.map(e => [e.id, e]));
+  const withLocal = e => Object.assign({}, localById.get(e.id) || {}, e);  // 로컬 전용 필드 보존
+
+  // 1) 배정·직접 등록 일정 (아웃룩 외): Notion 기준. Notion 조회 실패 시 로컬 유지
+  const nonOutlook = notionEvs
+    ? notionEvs.filter(e => !e.fromOutlook).map(withLocal)
+    : events.filter(e => !e.fromOutlook && e.pageId);
+
+  // 2) 아웃룩 일정: 조회 기간은 직접 조회 결과로 교체, 기간 밖은 기존(Notion 또는 로컬) 유지
+  const prevOutlook = notionEvs ? notionEvs.filter(e => e.fromOutlook) : events.filter(e => e.fromOutlook);
+  const clsMap = new Map();
+  (notionEvs || []).filter(e => e.fromOutlook).forEach(e => clsMap.set(e.outlookId || e.id, e));
+  events.filter(e => e.fromOutlook && (e.pageId || e.classification))
+        .forEach(e => { if (!clsMap.has(e.outlookId || e.id)) clsMap.set(e.outlookId || e.id, e); });
+  let outlook;
+  if (outlookEvs && range) {
+    const inRange = d => d >= range.start && d <= range.end;
+    const fresh = outlookEvs.map(e => {
+      const n = clsMap.get(e.outlookId || e.id);
+      return n ? { ...e, pageId: n.pageId, classification: n.classification } : e;
     });
-    if (!res.ok) return;
-    const data = await res.json();
-    if (!data.ok || !Array.isArray(data.events) || data.events.length === 0) return;
-    // 여러 멤버 데이터가 있을 때만 적용 (부분 데이터 방지)
-    const memberCount = new Set(data.events.map(e => e.memberId)).size;
-    if (memberCount < 2) return;
-    events = data.events;
-    saveDataLocal();
-    render();
-  } catch(_) {}
+    outlook = prevOutlook.filter(e => !inRange(e.date)).concat(fresh);
+  } else {
+    outlook = prevOutlook;
+  }
+
+  // 3) 아직 Notion 저장 전인 로컬 일정 (저장 진행 중 등)
+  // (Notion에 과거 중복 저장된 페이지가 있어 id 기준 중복 제거)
+  const ids = new Set();
+  const merged = nonOutlook.concat(outlook).filter(e => !ids.has(e.id) && ids.add(e.id));
+  const localOnly = events.filter(e => !e.fromOutlook && !e.pageId && !ids.has(e.id));
+  return merged.concat(localOnly);
+}
+
+async function refreshSharedData(start, end, opts = {}) {
+  if (!WORKER_URL) return;
+  const [nRes, oRes] = await Promise.allSettled([
+    workerPost('load-events'),
+    workerPost('sync-outlook', { startDate: start, endDate: end }),
+  ]);
+  const notionEvs  = nRes.status === 'fulfilled' && nRes.value.ok && Array.isArray(nRes.value.events) ? nRes.value.events : null;
+  const outlookEvs = oRes.status === 'fulfilled' && Array.isArray(oRes.value.events) ? oRes.value.events : null;
+  if (!notionEvs && !outlookEvs) { if (!opts.silent) showToast('⚠️ 공유 일정 불러오기 실패 — 이 PC 저장본으로 표시 (프록시 확인)'); return; }
+  events = mergeSharedEvents(notionEvs, outlookEvs, outlookEvs ? { start, end } : null);
+  if (outlookEvs) {
+    outlookCoverage = outlookCoverage
+      ? { start: start < outlookCoverage.start ? start : outlookCoverage.start, end: end > outlookCoverage.end ? end : outlookCoverage.end }
+      : { start, end };
+  } else if (!opts.silent) {
+    showToast('⚠️ 아웃룩 조회 실패 — Notion 저장본으로 표시 (프록시 확인)');
+  }
+  saveDataLocal();
+  render();
+  return { notion: !!notionEvs, outlook: !!outlookEvs, count: outlookEvs ? outlookEvs.length : 0 };
+}
+
+// 지정 기간의 아웃룩 일정이 이번 세션에 조회돼 있지 않으면 조회 (룰렛 기간 변경 시 등)
+async function ensureOutlookCoverage(start, end) {
+  if (outlookCoverage && outlookCoverage.start <= start && outlookCoverage.end >= end) return;
+  const s = outlookCoverage && outlookCoverage.start < start ? outlookCoverage.start : start;
+  const e = outlookCoverage && outlookCoverage.end > end ? outlookCoverage.end : end;
+  await refreshSharedData(s, e, { silent: true });
+}
+
+// 앱 시작 시: 오늘 -7일 ~ +3개월 공유 데이터 로드
+async function loadEventsFromNotion() {
+  const today = fmtDate(new Date());
+  await refreshSharedData(addDaysStr(today, -7), addDaysStr(today, SYNC_AHEAD_DAYS), { silent: true });
 }
 
 // ── Notion에 단일 이벤트 저장 (신규 or 수정) ────────────────────────────
@@ -1972,28 +2047,18 @@ async function syncOutlook() {
   btn.textContent = '☁️ 동기화 중...';
 
   try {
-    // 아웃룩에서 직접 동기화 (화면 표시용)
-    const start = new Date(currentWeekStart);
-    start.setDate(start.getDate() - 7);
-    const end = new Date(currentWeekStart);
-    end.setDate(end.getDate() + 28);
-
-    const res = await fetch(WORKER_URL, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Action': 'sync-outlook' },
-      body:    JSON.stringify({ startDate: fmtDate(start), endDate: fmtDate(end) }),
-    });
-    if (!res.ok) throw new Error(`Worker 오류 ${res.status}`);
-    const { events: outlookEvents } = await res.json();
-    events = events.filter(e => !e.fromOutlook);
-    events = events.concat(outlookEvents || []);
-    saveDataLocal();
+    // 보고 있는 주 -7일 ~ (그 주 +4주 / 오늘 +3개월 중 늦은 날) — Notion 공유 데이터와 병합
+    const weekStart = fmtDate(currentWeekStart);
+    const start = addDaysStr(weekStart, -7);
+    const endA  = addDaysStr(weekStart, 28);
+    const endB  = addDaysStr(fmtDate(new Date()), SYNC_AHEAD_DAYS);
+    const r = await refreshSharedData(start, endA > endB ? endA : endB, { silent: true });
+    if (!r || !r.outlook) throw new Error('아웃룩 조회 실패 (프록시 확인)');
 
     lastSyncTime = new Date().toLocaleString('ko-KR');
     localStorage.setItem('lastSyncTime', lastSyncTime);
 
-    render();
-    showToast(`☁️ 아웃룩 동기화 완료 — ${outlookEvents?.length ?? 0}개 일정`);
+    showToast(`☁️ 아웃룩 동기화 완료 — ${r.count}개 일정`);
 
     // Notion 백그라운드 저장 (실패해도 UI에 영향 없음)
     fetch(WORKER_URL, {
@@ -2158,6 +2223,8 @@ function classifyAvailability(e) {
   // 2. localStorage 폴백 (pageId 없거나 Notion 저장 전/실패 시)
   const ov = e.id ? tagOverrides[e.id] : null;
   if (ov === 'available' || ov === 'blocking' || ov === 'urgent') return ov;
+  // 이 시스템에서 배정된 배포지원 일정 = 이미 다른 배포에 투입 중 → 불가 (기간 겹치는 새 배포에서 제외)
+  if (e.type === 'deploy' && !e.fromOutlook) return 'blocking';
   const title = normalizeTitle(e.title);
   // 3. 가능 키워드([티켓][파트너][내부][교육][대기], [내부/LMS]처럼 슬래시·언더바 토큰 포함) 있으면 가능
   if (titleHasAvailableTag(title)) {
@@ -2251,8 +2318,24 @@ async function openRoulette() {
 
   document.getElementById('rouletteModal').classList.add('open');
 
-  // Notion 이력 기반 rrOrder 갱신 (비동기, 완료 후 UI 재갱신)
-  await loadRrOrderFromNotion();
+  // Notion 이력 기반 rrOrder 갱신 + 배포 기간 아웃룩 일정 확보 (모든 PC 동일 판정)
+  // (데이터 확보 전 refreshRoulette 호출 시 pendingWinner가 잘못 지워질 수 있어 완료 후 1회만 호출)
+  await Promise.all([loadRrOrderFromNotion(), ensureRouletteRangeData()]);
+  refreshRoulette();
+}
+
+// 룰렛 배포 기간의 아웃룩 일정이 없으면 조회 후 재계산 (날짜 변경 시 호출)
+async function ensureRouletteRangeData() {
+  const ds = document.getElementById('rDepDateStart')?.value || selectedDate();
+  const de = document.getElementById('rDepDateEnd')?.value   || ds;
+  if (!WORKER_URL || de < ds) return;
+  const info = document.getElementById('rrInfo');
+  if (!(outlookCoverage && outlookCoverage.start <= ds && outlookCoverage.end >= de) && info)
+    info.textContent = '⏳ 해당 기간 아웃룩 일정 불러오는 중…';
+  await ensureOutlookCoverage(ds, de);
+}
+async function onRouletteRangeChange() {
+  await ensureRouletteRangeData();
   refreshRoulette();
 }
 
@@ -2304,11 +2387,15 @@ function refreshRoulette() {
     } catch(e) { localStorage.removeItem('pendingWinner'); }
   }
 
-  // C: 이 기간에 이미 배정된 담당자가 있으면 재배정 차단 (스핀 이력/배포 일정 팔로우)
+  // C: 선택 기간 '전체'가 이미 한 사람에게 배정돼 있으면 재배정 차단 (같은 배포 중복 배정 방지)
+  //    기간이 일부만 겹치는 다른 배포는 차단하지 않음 → 겹치는 사람은 가용 판별에서 '이미 투입 중'으로 제외됨
   const _depDates = getDateRange(depDateStart, depDateEnd);
-  const _assigned = [...new Set(events
-    .filter(e => e.type === 'deploy' && _depDates.includes(e.date))
-    .map(e => (ALL().find(m => m.id === e.memberId) || {}).name).filter(Boolean))];
+  const _byMember = {};
+  events.filter(e => e.type === 'deploy' && !e.fromOutlook && _depDates.includes(e.date))
+        .forEach(e => { (_byMember[e.memberId] = _byMember[e.memberId] || new Set()).add(e.date); });
+  const _assigned = Object.entries(_byMember)
+    .filter(([, ds]) => _depDates.length > 0 && _depDates.every(d => ds.has(d)))
+    .map(([id]) => (ALL().find(m => m.id === Number(id)) || {}).name).filter(Boolean);
   if (_assigned.length > 0) {
     spinBtnEl.disabled = true;
     spinBtnEl.textContent = '⛔ 이미 배정됨 — 취소 후 가능';
@@ -2397,6 +2484,7 @@ function renderAvailableMembers() {
 function unavailReasonLabel(e) {
   const nc = CLS_FROM_KR[e.classification] || (e.id ? tagOverrides[e.id] : null);
   if (nc === 'blocking') return '매니저 수동 분류(불가)';
+  if (e.type === 'deploy' && !e.fromOutlook) return '이미 배포지원 투입 중';
   const title = normalizeTitle(e.title);
   if (titleHasAvailableTag(title) && !e.isAllDay && title.includes('원격')) return '원격 지원 중';
   const out = OUT_KEYWORDS.find(k => title.includes(k));
