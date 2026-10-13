@@ -966,6 +966,22 @@
     <div class="roulette-tabs">
       <button class="roulette-tab active" id="tabWheel" onclick="switchTab('wheel')">🎲 돌림판</button>
       <button class="roulette-tab" id="tabHistory" onclick="switchTab('history')">📋 스핀 이력</button>
+      <button class="roulette-tab" id="tabStats" onclick="switchTab('stats')">📊 배정 통계</button>
+    </div>
+
+    <!-- 배정 통계 탭 — 공정성을 수치로 증명 (요구사항 §4-3) -->
+    <div class="tab-panel" id="panelStats">
+      <div class="dep-time-row" style="margin-bottom:10px;">
+        <span class="dep-time-label">📅 집계 기간</span>
+        <input type="date" id="statFrom" onchange="loadStats()"
+          style="border:1px solid #c5cae9;border-radius:6px;padding:4px 8px;font-size:12px;color:#1a237e;" />
+        <span style="color:#aaa;font-size:12px;">~</span>
+        <input type="date" id="statTo" onchange="loadStats()"
+          style="border:1px solid #c5cae9;border-radius:6px;padding:4px 8px;font-size:12px;color:#1a237e;" />
+        <button class="btn" onclick="setStatPreset('all')" style="font-size:11px;padding:4px 8px;">전체</button>
+        <button class="btn" onclick="setStatPreset('90')" style="font-size:11px;padding:4px 8px;">최근 90일</button>
+      </div>
+      <div id="statsBody"><p class="rr-info">불러오는 중…</p></div>
     </div>
 
     <!-- 돌림판 탭 -->
@@ -1108,30 +1124,52 @@ const EXTRA_MEMBERS = [
   { id: 11, name: '양창호', email: 'chh.yang@softcamp.co.kr',    team: '추가 후보', dept: '' },
 ];
 let includeExtra = localStorage.getItem('includeExtra') === '1';
-function ALL()  { return MEMBERS.concat(EXTRA_MEMBERS); }                             // 조회용: 항상 전체(추가 멤버도 이름/ID로 찾힘)
-function pool() { return includeExtra ? MEMBERS.concat(EXTRA_MEMBERS) : MEMBERS; }    // 표시·룰렛용: 토글 상태 반영
+// 서버가 내려준 멤버 명단(get-availability). 있으면 이것이 기준 — 모든 PC가 동일.
+// ⚠️ 과거엔 includeExtra가 PC별 localStorage라, 같은 날 운영자마다 후보군(8명/11명)이 달랐다.
+let serverRoster = null;
 
-// 헤더 '➕ 추가 인원' 토글 — 3명을 후보에 포함/제외
+function ALL()  { return MEMBERS.concat(EXTRA_MEMBERS); }   // 조회용: 항상 전체(이름/ID 역조회)
+function pool() {                                           // 표시·룰렛용: 서버 명단 우선
+  if (serverRoster && serverRoster.length) {
+    const ids = new Set(serverRoster.map(m => m.id));
+    return ALL().filter(m => ids.has(m.id));
+  }
+  return includeExtra ? MEMBERS.concat(EXTRA_MEMBERS) : MEMBERS;
+}
+
+// 헤더 '추가 인원' 버튼 — 후보 명단은 이제 서버가 결정한다(모든 PC 동일).
+// 명단 변경은 Cloudflare 환경변수 INCLUDE_EXTRA(0/1) 로 하며, 여기서는 현황만 안내한다.
 function toggleExtra() {
+  if (serverRoster && serverRoster.length) {
+    showToast(includeExtra
+      ? `현재 후보 ${serverRoster.length}명 (추가 인원 포함) — 명단 변경은 관리자에게 요청하세요`
+      : `현재 후보 ${serverRoster.length}명 (기본 인원) — 명단 변경은 관리자에게 요청하세요`);
+    return;
+  }
+  // 서버 응답 전(또는 오프라인) 로컬 폴백
   includeExtra = !includeExtra;
   localStorage.setItem('includeExtra', includeExtra ? '1' : '0');
-  rrOrder = pool().map(m => m.id);   // 새 풀 기준으로 순서 초기화 후 Notion 이력으로 재구성
-  saveRrOrder();
   updateExtraBtn();
   render();
   if (WORKER_URL) loadRrOrderFromNotion().then(() => {
     if (document.getElementById('rouletteModal')?.classList.contains('open')) refreshRoulette();
   });
-  showToast(includeExtra ? '➕ 추가 인원 3명(문병린·문정일·양창호)을 후보에 포함했습니다' : '추가 인원을 제외했습니다 (기존 8명)');
+  showToast('⚠️ 서버 명단 확인 전입니다 — 이 PC에만 적용됩니다');
 }
 function updateExtraBtn() {
+  const n = pool().length;
   const b = document.getElementById('extraBtn');
   if (b) {
-    b.textContent     = includeExtra ? '➖ 추가 인원 제외 (8명)' : '➕ 추가 인원 포함 (11명)';
+    b.textContent = serverRoster && serverRoster.length
+      ? `👥 후보 ${n}명${includeExtra ? ' (추가 인원 포함)' : ''}`
+      : (includeExtra ? '➖ 추가 인원 제외 (8명)' : '➕ 추가 인원 포함 (11명)');
     b.style.background = includeExtra ? '#e8f5e9' : '';
+    b.title = serverRoster && serverRoster.length
+      ? '후보 명단은 서버 설정(INCLUDE_EXTRA)으로 모든 사용자에게 동일하게 적용됩니다'
+      : '문병린·문정일·양창호를 후보에 포함/제외';
   }
   const c = document.getElementById('memberCount');
-  if (c) c.textContent = String(pool().length);   // 부제 인원수 동기화
+  if (c) c.textContent = String(n);   // 부제 인원수 동기화
 }
 
 // 헤더 드롭다운 (보기 / 도움말) 열고 닫기
@@ -2011,10 +2049,27 @@ async function ensureOutlookCoverage(start, end) {
   await refreshSharedData(s, e, { silent: true });
 }
 
-// 앱 시작 시: 오늘 -7일 ~ +3개월 공유 데이터 로드
+// 앱 시작 시: 서버 멤버 명단 + 오늘 -7일 ~ +3개월 공유 데이터 로드
 async function loadEventsFromNotion() {
   const today = fmtDate(new Date());
-  await refreshSharedData(addDaysStr(today, -7), addDaysStr(today, SYNC_AHEAD_DAYS), { silent: true });
+  await Promise.all([
+    loadServerRoster(),
+    refreshSharedData(addDaysStr(today, -7), addDaysStr(today, SYNC_AHEAD_DAYS), { silent: true }),
+  ]);
+}
+
+// 멤버 명단을 서버에서 받아 모든 PC가 같은 후보군을 보도록 맞춘다 (외부 API 호출 없는 가벼운 요청)
+async function loadServerRoster() {
+  if (!WORKER_URL) return;
+  try {
+    const r = await workerPost('get-roster');
+    if (r && r.ok && Array.isArray(r.members) && r.members.length) {
+      serverRoster = r.members;
+      includeExtra = serverRoster.some(m => m.extra);
+      updateExtraBtn();
+      render();
+    }
+  } catch (_) { /* 실패 시 로컬 설정 유지 */ }
 }
 
 // ── Notion에 단일 이벤트 저장 (신규 or 수정) ────────────────────────────
@@ -2355,14 +2410,45 @@ async function openRoulette() {
   refreshRoulette();
 }
 
-// 룰렛 배포 기간의 아웃룩 일정이 없으면 조회 후 재계산 (날짜 변경 시 호출)
+// ── 서버 배정 컨텍스트 ────────────────────────────────────────────────────
+// 가용 판정은 서버(Worker)가 한다. 모든 PC가 이 응답 하나만 보고 화면을 그리므로
+// "PC마다 다르게 보이는" 문제가 구조적으로 사라진다.
+// 서버 호출이 실패하면 아래 로컬 계산으로 폴백하되, 화면에 '이 PC 기준'임을 표시한다.
+let availCtx = null;
+
+const sameRange = (r, ds, de, st, et) =>
+  r && r.startDate === ds && r.endDate === de && r.startTime === st && r.endTime === et;
+
+async function fetchAvailability(ds, de, st, et) {
+  if (!WORKER_URL) { availCtx = null; return null; }
+  try {
+    const r = await workerPost('get-availability',
+      { startDate: ds, endDate: de, startTime: st, endTime: et });
+    availCtx = (r && r.ok) ? r : null;
+    if (availCtx) {
+      // 멤버 명단을 서버 기준으로 동기화 → 모든 PC가 같은 후보군을 본다
+      serverRoster = availCtx.members.map(m => ({ id:m.id, name:m.name, extra:m.extra }));
+      includeExtra = serverRoster.some(m => m.extra);
+      updateExtraBtn();
+    }
+  } catch (_) {
+    availCtx = null;
+  }
+  return availCtx;
+}
+
+// 룰렛 배포 기간의 판정 데이터를 서버에서 받아온다 (날짜·시간 변경 시 호출)
 async function ensureRouletteRangeData() {
   const ds = document.getElementById('rDepDateStart')?.value || selectedDate();
   const de = document.getElementById('rDepDateEnd')?.value   || ds;
+  const st = document.getElementById('rDepStart')?.value || '09:00';
+  const et = document.getElementById('rDepEnd')?.value   || '18:00';
   if (!WORKER_URL || de < ds) return;
   const info = document.getElementById('rrInfo');
-  if (!(outlookCoverage && outlookCoverage.start <= ds && outlookCoverage.end >= de) && info)
-    info.textContent = '⏳ 해당 기간 아웃룩 일정 불러오는 중…';
+  if (info && !sameRange(availCtx && availCtx.range, ds, de, st, et))
+    info.textContent = '⏳ 해당 기간 가용 인원 확인 중…';
+  await fetchAvailability(ds, de, st, et);
+  // 그리드 표시용 아웃룩 일정도 함께 확보 (판정과 별개로 화면에 일정을 그려야 하므로)
   await ensureOutlookCoverage(ds, de);
 }
 async function onRouletteRangeChange() {
@@ -2377,16 +2463,34 @@ function refreshRoulette() {
   const depStart = document.getElementById('rDepStart')?.value || '09:00';
   const depEnd   = document.getElementById('rDepEnd')?.value   || '18:00';
 
-  // 기간 단위 가용 멤버 필터
-  wheelSlices = rrOrder
-    .map(id => ALL().find(m => m.id === id))
-    .filter(m => m && pool().some(p => p.id === m.id) && isMemberAvailableInRange(m.id, depDateStart, depDateEnd, depStart, depEnd));
+  // 서버 판정이 있으면 그것을 쓰고, 없으면 이 PC에서 계산(폴백)
+  const ctx = sameRange(availCtx && availCtx.range, depDateStart, depDateEnd, depStart, depEnd)
+            ? availCtx : null;
+  const rosterSize = ctx ? ctx.members.length : pool().length;
+
+  if (ctx) {
+    // 서버가 내려준 가용 멤버를 rrOrder 순서로 배치 (순서는 표시용 — 확률은 모두 동일)
+    const byId = new Map(ctx.members.map(m => [m.id, m]));
+    const ordered = rrOrder.filter(id => byId.has(id))
+      .concat(ctx.members.map(m => m.id).filter(id => !rrOrder.includes(id)));
+    wheelSlices = ordered.map(id => byId.get(id)).filter(m => m.available)
+      .map(m => ({ ...m, team: (ALL().find(x => x.id === m.id) || {}).team || m.team || '' }));
+  } else {
+    wheelSlices = rrOrder
+      .map(id => ALL().find(m => m.id === id))
+      .filter(m => m && pool().some(p => p.id === m.id) && isMemberAvailableInRange(m.id, depDateStart, depDateEnd, depStart, depEnd));
+  }
 
   lastWinner = null;
   currentWinner = null;
   const rangeLabel = depDateStart === depDateEnd ? depDateStart : `${depDateStart} ~ ${depDateEnd}`;
+  const srcNote = ctx
+    ? (ctx.failedMembers && ctx.failedMembers.length
+        ? ` · ⚠️ ${ctx.failedMembers.join(', ')} 일정 조회 실패`
+        : '')
+    : ' · ⚠️ 서버 확인 실패, 이 PC 기준';
   document.getElementById('rrInfo').textContent =
-    `${rangeLabel} ${depStart}~${depEnd} · 가능 ${wheelSlices.length}명 / 전체 ${pool().length}명`;
+    `${rangeLabel} ${depStart}~${depEnd} · 가능 ${wheelSlices.length}명 / 전체 ${rosterSize}명${srcNote}`;
   document.getElementById('resultBanner').className = 'result-banner';
   document.getElementById('resultBanner').innerHTML = '';
   document.getElementById('assignDeployBtn').className = 'assign-deploy-btn';
@@ -2420,13 +2524,18 @@ function refreshRoulette() {
 
   // C: 선택 기간 '전체'가 이미 한 사람에게 배정돼 있으면 재배정 차단 (같은 배포 중복 배정 방지)
   //    기간이 일부만 겹치는 다른 배포는 차단하지 않음 → 겹치는 사람은 가용 판별에서 '이미 투입 중'으로 제외됨
-  const _depDates = getDateRange(depDateStart, depDateEnd);
-  const _byMember = {};
-  events.filter(e => e.type === 'deploy' && !e.fromOutlook && _depDates.includes(e.date))
-        .forEach(e => { (_byMember[e.memberId] = _byMember[e.memberId] || new Set()).add(e.date); });
-  const _assigned = Object.entries(_byMember)
-    .filter(([, ds]) => _depDates.length > 0 && _depDates.every(d => ds.has(d)))
-    .map(([id]) => (ALL().find(m => m.id === Number(id)) || {}).name).filter(Boolean);
+  let _assigned;
+  if (ctx) {
+    _assigned = ctx.fullyAssignedBy || [];
+  } else {
+    const _depDates = getDateRange(depDateStart, depDateEnd);
+    const _byMember = {};
+    events.filter(e => e.type === 'deploy' && !e.fromOutlook && _depDates.includes(e.date))
+          .forEach(e => { (_byMember[e.memberId] = _byMember[e.memberId] || new Set()).add(e.date); });
+    _assigned = Object.entries(_byMember)
+      .filter(([, ds]) => _depDates.length > 0 && _depDates.every(d => ds.has(d)))
+      .map(([id]) => (ALL().find(m => m.id === Number(id)) || {}).name).filter(Boolean);
+  }
   if (_assigned.length > 0) {
     spinBtnEl.disabled = true;
     spinBtnEl.textContent = '⛔ 이미 배정됨 — 취소 후 가능';
@@ -2482,11 +2591,37 @@ function renderAvailableMembers() {
   const dateStr  = selectedDate();
   const depStart = document.getElementById('rDepStart')?.value || '09:00';
   const depEnd   = document.getElementById('rDepEnd')?.value   || '18:00';
+  const ds0 = document.getElementById('rDepDateStart')?.value || dateStr;
+  const de0 = document.getElementById('rDepDateEnd')?.value   || ds0;
+  const ctx = sameRange(availCtx && availCtx.range, ds0, de0, depStart, depEnd) ? availCtx : null;
+
+  // 서버 판정이 있으면 서버 명단 기준 (모든 PC 동일). 없으면 기존 로컬 계산.
+  if (ctx) {
+    const byId = new Map(ctx.members.map(m => [m.id, m]));
+    const order = rrOrder.filter(id => byId.has(id))
+      .concat(ctx.members.map(m => m.id).filter(id => !rrOrder.includes(id)));
+    const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    document.getElementById('rrQueue').innerHTML = order.map(id => {
+      const m = byId.get(id);
+      const tip = m.available
+        ? (m.urgent ? '⚠️ 가능하나 긴급 업무 중 — 신중 판단' : '배포 가능')
+        : (m.reasons || []).map(r => `${r.dates} ${r.text}`.trim()).join(' / ');
+      const hint = m.available ? '' : (m.reasons || []).slice(0,1).map(r => r.dates).join('');
+      return `<div class="rr-item ${m.available ? 'avail' : 'unavail'}" title="${esc(tip)}">
+        ${m.urgent ? '<span style="margin-right:2px;" title="긴급 업무 중">⚠️</span>' : ''}
+        ${m.stale ? '<span style="margin-right:2px;" title="아웃룩 조회 실패 — 판정 신뢰 불가">❓</span>' : ''}
+        ${esc(m.name)}
+        ${hint ? `<span class="rr-conflict-hint">${esc(hint)}</span>` : ''}
+      </div>`;
+    }).join('');
+    renderUnavailReasons();
+    return;
+  }
 
   // 전체 rrOrder 순서로 표시 (가능 여부 색상 구분)
   document.getElementById('rrQueue').innerHTML = rrOrder.map(id => {
     const m = ALL().find(x => x.id === id);
-    if (!m) return '';
+    if (!m || !pool().some(p => p.id === m.id)) return '';
     const depDateStart2 = document.getElementById('rDepDateStart')?.value || dateStr;
     const depDateEnd2   = document.getElementById('rDepDateEnd')?.value   || depDateStart2;
     const avail  = isMemberAvailableInRange(m.id, depDateStart2, depDateEnd2, depStart, depEnd);
@@ -2562,9 +2697,15 @@ function renderUnavailReasons() {
   const st = document.getElementById('rDepStart')?.value || '09:00';
   const et = document.getElementById('rDepEnd')?.value   || '18:00';
   const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const rows = pool()
-    .filter(m => !isMemberAvailableInRange(m.id, ds, de, st, et))
-    .map(m => `<div class="ur-row"><span class="ur-name">${esc(m.name)}</span>${getUnavailReason(m.id, ds, de, st, et).map(esc).join(' / ')}</div>`);
+  const ctx = sameRange(availCtx && availCtx.range, ds, de, st, et) ? availCtx : null;
+
+  const rows = ctx
+    ? ctx.members.filter(m => !m.available).map(m =>
+        `<div class="ur-row"><span class="ur-name">${esc(m.name)}</span>` +
+        (m.reasons || []).map(r => esc(`${r.dates} ${r.text}`.trim())).join(' / ') + `</div>`)
+    : pool()
+        .filter(m => !isMemberAvailableInRange(m.id, ds, de, st, et))
+        .map(m => `<div class="ur-row"><span class="ur-name">${esc(m.name)}</span>${getUnavailReason(m.id, ds, de, st, et).map(esc).join(' / ')}</div>`);
   box.innerHTML = rows.length ? `<div class="ur-title">🚫 배포 불가 사유</div>${rows.join('')}` : '';
 }
 
@@ -2849,12 +2990,78 @@ async function resetPickHistory() {
 }
 
 function switchTab(tab) {
-  const isWheel = tab === 'wheel';
-  document.getElementById('panelWheel').classList.toggle('active', isWheel);
-  document.getElementById('panelHistory').classList.toggle('active', !isWheel);
-  document.getElementById('tabWheel').classList.toggle('active', isWheel);
-  document.getElementById('tabHistory').classList.toggle('active', !isWheel);
-  if (!isWheel) renderHistory();
+  for (const [name, panel, btn] of [
+    ['wheel','panelWheel','tabWheel'], ['history','panelHistory','tabHistory'], ['stats','panelStats','tabStats'],
+  ]) {
+    document.getElementById(panel)?.classList.toggle('active', tab === name);
+    document.getElementById(btn)?.classList.toggle('active', tab === name);
+  }
+  if (tab === 'history') renderHistory();
+  if (tab === 'stats')   loadStats();
+}
+
+// ── 배정 통계 (공정성 증명) ───────────────────────────────────────────────
+// 집계는 서버가 공유 이력(SPINLOG)에서 계산한다. [취소]·[초기화]는 자동 제외.
+// 기간을 좁히면 초기 테스트 스핀을 걸러낼 수 있다 — 운영 시작일 이후로 맞춰 쓸 것.
+function setStatPreset(kind) {
+  const to = fmtDate(new Date());
+  document.getElementById('statTo').value = to;
+  document.getElementById('statFrom').value = kind === 'all' ? '' : addDaysStr(to, -90);
+  loadStats();
+}
+
+async function loadStats() {
+  const box = document.getElementById('statsBody');
+  if (!box) return;
+  if (!WORKER_URL) { box.innerHTML = '<p class="rr-info">서버 미설정</p>'; return; }
+  box.innerHTML = '<p class="rr-info">불러오는 중…</p>';
+  const from = document.getElementById('statFrom')?.value || '';
+  const to   = document.getElementById('statTo')?.value   || '';
+  let s;
+  try { s = await workerPost('get-stats', { from: from || undefined, to: to || undefined }); }
+  catch (e) { box.innerHTML = `<p class="rr-info">통계를 불러오지 못했습니다 — ${String(e.message || e)}</p>`; return; }
+  if (!s || !s.ok) { box.innerHTML = '<p class="rr-info">통계를 불러오지 못했습니다</p>'; return; }
+
+  const esc = x => String(x).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const max = Math.max(1, s.fairness.max);
+  const rows = s.members.map(m => {
+    const w = Math.round(m.count / max * 100);
+    return `<tr>
+      <td style="padding:5px 8px;white-space:nowrap;font-weight:600;color:#1a237e;">${esc(m.name)}${m.extra ? ' <span style="font-weight:400;color:#999;font-size:10px;">추가</span>' : ''}</td>
+      <td style="padding:5px 8px;width:100%;">
+        <div style="background:#eceff1;border-radius:4px;height:14px;position:relative;">
+          <div style="background:${m.count === 0 ? '#ef9a9a' : '#5c6bc0'};width:${w}%;height:100%;border-radius:4px;"></div>
+        </div>
+      </td>
+      <td style="padding:5px 8px;text-align:right;white-space:nowrap;font-weight:700;">${m.count}회</td>
+      <td style="padding:5px 8px;text-align:right;white-space:nowrap;color:#777;">${m.share}%</td>
+      <td style="padding:5px 8px;text-align:right;white-space:nowrap;color:#999;font-size:11px;">${m.lastAssigned || '—'}</td>
+    </tr>`;
+  }).join('');
+
+  const never = s.fairness.neverAssigned;
+  box.innerHTML = `
+    <div class="rr-info" style="margin-bottom:8px;">
+      총 <b>${s.total}회</b> 배정 · 1인 평균 <b>${s.fairness.average}회</b> ·
+      최다 ${s.fairness.max}회 / 최소 ${s.fairness.min}회
+      ${s.cancelledOrReset ? ` · 취소·초기화 ${s.cancelledOrReset}건 제외` : ''}
+    </div>
+    ${never.length ? `<div class="rr-unavail-reasons" style="margin-bottom:8px;">
+      <div class="ur-title">⚠️ 한 번도 배정되지 않은 인원</div>
+      <div class="ur-row">${never.map(esc).join(' · ')}</div></div>` : ''}
+    <table style="width:100%;border-collapse:collapse;font-size:12px;">
+      <thead><tr style="color:#888;font-size:10px;text-transform:uppercase;">
+        <th style="text-align:left;padding:4px 8px;">멤버</th><th></th>
+        <th style="text-align:right;padding:4px 8px;">횟수</th>
+        <th style="text-align:right;padding:4px 8px;">비율</th>
+        <th style="text-align:right;padding:4px 8px;">최근 배정</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <p class="rr-info" style="margin-top:8px;font-size:10px;">
+      ※ 가용 인원 중 동일 확률 추첨이므로 단기간에는 편차가 생길 수 있습니다.
+      기간을 넓게 볼수록 평균에 수렴합니다.
+    </p>`;
 }
 
 function assignFromWheel() {

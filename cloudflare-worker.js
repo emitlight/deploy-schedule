@@ -157,6 +157,24 @@ export default {
           break;
         }
 
+        // ── 배정 컨텍스트 (가용 판정) — 모든 PC가 같은 답을 보는 단일 경로 ──
+        case 'get-availability': {
+          result = await buildAvailability(env, body || {});
+          break;
+        }
+
+        // ── 멤버 명단 (가벼움 — 외부 API 호출 없음) ─────────────────────
+        case 'get-roster': {
+          result = { ok:true, members: buildRoster(env) };
+          break;
+        }
+
+        // ── 멤버별 배정 통계 (공정성 증명용) ────────────────────────────
+        case 'get-stats': {
+          result = await buildStats(env, body || {});
+          break;
+        }
+
         // ── 아웃룩 캘린더 동기화 (수동) ─────────────────────────────────
         case 'sync-outlook': {
           const { startDate, endDate } = body||{};
@@ -558,6 +576,287 @@ async function loadNotionEventsByRange(env, startDate, endDate, outlookOnly=fals
   }
   return pages;
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// 배포지원 가용 판정 — 이 시스템의 단일 판단 주체
+// ════════════════════════════════════════════════════════════════════════
+// ⚠️ 과거엔 이 규칙이 index.html(브라우저)에만 있어, PC마다 가진 데이터가 다르면
+//    같은 질문에 다른 답이 나왔다. 이제 서버가 한 번 계산해 모두에게 같은 답을 내려준다.
+//    규칙을 바꿀 때는 반드시 이 파일만 고칠 것(프론트에는 사본을 두지 않는다).
+
+const AVAILABLE_KEYWORDS = ['티켓','파트너','내부','교육','대기'];  // 대괄호 안 토큰이 이 중 하나면 가용
+const TAG_SYNONYMS       = { '[내부업무]':'[내부]', '[내부 업무]':'[내부]' };
+const URGENT_TAG         = '[긴급]';
+const AVAIL_OUT_KEYWORDS = ['연차','반차','휴가','외근','출장','재택','공휴일','경조','병가','조퇴','OOF','부재중'];
+const CLS_FROM_KR        = { '가능':'available', '불가':'blocking', '긴급':'urgent' };
+
+function normalizeTitle(title) {
+  let t = title || '';
+  for (const k in TAG_SYNONYMS) t = t.split(k).join(TAG_SYNONYMS[k]);
+  return t;
+}
+
+// 대괄호 태그 안을 구분자로 쪼개 토큰 하나라도 가용 키워드면 true
+// 예: [티켓] · [티켓 한국산업진흥원] · [티켓_고객사] · [완료/티켓] · [내부/LMS]
+function titleHasAvailableTag(title) {
+  const tags = (title || '').match(/\[([^\]]+)\]/g) || [];
+  return tags.some(raw => raw.slice(1,-1).split(/[\/_\s·:,\-]+/)
+    .some(tok => AVAILABLE_KEYWORDS.includes(tok)));
+}
+
+// 일정 1건의 배포지원 분류: 'available' | 'urgent' | 'blocking'
+function classifyAvailability(e) {
+  const nc = CLS_FROM_KR[e.classification];
+  if (nc) return nc;                                            // 1. 매니저 수동 분류 최우선(공유)
+  if (e.type === 'deploy' && !e.fromOutlook) return 'blocking'; // 2. 이미 배포지원 투입 중
+  const title = normalizeTitle(e.title);
+  if (titleHasAvailableTag(title)) {                            // 3. 가용 키워드
+    if (!e.isAllDay && title.includes('원격')) return 'blocking';  //    시간제 원격 지원 중 = 불가
+    if (title.includes(URGENT_TAG)) return 'urgent';               //    가용 + 긴급 = 주의
+    return 'available';
+  }
+  if (e.type === 'out' || AVAIL_OUT_KEYWORDS.some(k => title.includes(k))) return 'blocking'; // 4. 부재
+  if (/\[[^\]]+\]/.test(title)) return 'blocking';              // 5. 가용 키워드 없는 태그 = 전담 업무
+  return 'available';                                            // 6. 태그 없는 일반 회의 = 가능
+}
+
+const isFreeTimeEvent = e => {
+  const c = classifyAvailability(e);
+  return c === 'available' || c === 'urgent';
+};
+
+function timeToMinutes(t) {
+  const [h,m] = String(t||'').split(':').map(Number);
+  return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0);
+}
+function eventsOverlap(aS,aE,bS,bE) {
+  return timeToMinutes(aS) < timeToMinutes(bE) && timeToMinutes(bS) < timeToMinutes(aE);
+}
+
+// 기간 내 평일 목록 (주말 제외 — 배포지원은 평일만 운영)
+function weekdayRange(startDate, endDate) {
+  const out = [];
+  for (let d = startDate, i = 0; d <= endDate && i < 400; d = addDaysISO(d,1), i++) {
+    const wd = new Date(d + 'T00:00:00Z').getUTCDay();
+    if (wd !== 0 && wd !== 6) out.push(d);
+  }
+  return out;
+}
+
+// 멤버가 그 날 그 시간대에 가능한지
+function isMemberAvailableOn(events, memberId, date, startTime, endTime) {
+  return !events.some(e =>
+    e.memberId === memberId && e.date === date &&
+    (e.isAllDay || eventsOverlap(startTime, endTime, e.startTime, e.endTime)) &&
+    !isFreeTimeEvent(e));
+}
+
+// 불가 사유 한 줄 라벨
+function unavailReasonLabel(e) {
+  if (CLS_FROM_KR[e.classification] === 'blocking') return '매니저 수동 분류(불가)';
+  if (e.type === 'deploy' && !e.fromOutlook) return '이미 배포지원 투입 중';
+  const title = normalizeTitle(e.title);
+  if (titleHasAvailableTag(title) && !e.isAllDay && title.includes('원격')) return '원격 지원 중';
+  const out = AVAIL_OUT_KEYWORDS.find(k => title.includes(k));
+  if (e.type === 'out' || out) return `부재(${out || '휴가·외근'})`;
+  const tag = (title.match(/\[[^\]]+\]/) || [])[0];
+  if (tag) return `고객사·전담 업무 ${tag}`;
+  return '일정 충돌';
+}
+
+// 멤버별 불가 사유 — 연속된 날짜 중 사유가 같으면 하나로 묶는다
+function buildUnavailReasons(events, memberId, days, startTime, endTime) {
+  const blocked = days.map(d => {
+    const e = events.find(ev => ev.memberId === memberId && ev.date === d &&
+      (ev.isAllDay || eventsOverlap(startTime, endTime, ev.startTime, ev.endTime)) &&
+      !isFreeTimeEvent(ev));
+    return e ? { d, e } : null;
+  }).filter(Boolean);
+  if (blocked.length === 0) return [{ dates:'', text:'해당 기간에 평일이 없음' }];
+  const md = d => d.slice(5).replace('-','/');
+  const groups = [];
+  blocked.forEach(({d,e}) => {
+    const text = `${e.isAllDay ? '종일' : `${e.startTime}~${e.endTime}`} · ${unavailReasonLabel(e)}`;
+    const g = groups[groups.length-1];
+    if (g && g.text === text && days.indexOf(d) === days.indexOf(g.end) + 1) g.end = d;
+    else groups.push({ start:d, end:d, text });
+  });
+  return groups.map(g => ({
+    dates: g.end !== g.start ? `${md(g.start)}~${md(g.end)}` : md(g.start),
+    text:  g.text,
+  }));
+}
+
+// 서버가 내려주는 배정 컨텍스트 — 모든 PC가 이 응답 하나만 보고 화면을 그린다
+async function buildAvailability(env, { startDate, endDate, startTime, endTime }) {
+  if (!startDate || !endDate) throw new Error('startDate, endDate 필요');
+  const sT = startTime || '09:00', eT = endTime || '18:00';
+  const days = weekdayRange(startDate, endDate);
+
+  const roster = buildRoster(env);
+  // 아웃룩(원천) + Notion(배정·수동분류)을 합쳐 판정 입력을 만든다
+  const [outlook, notionRows] = await Promise.all([
+    cachedSyncOutlook(env, startDate, endDate),
+    loadNotionEventsByRange(env, startDate, endDate, false).then(ps => ps.map(parseNotionSchedule).filter(Boolean)),
+  ]);
+  const clsByOid = new Map();
+  notionRows.filter(r => r.fromOutlook).forEach(r => clsByOid.set(r.outlookId || r.id, r.classification));
+  const outlookEvents = outlook.events.map(e =>
+    clsByOid.has(e.outlookId) ? { ...e, classification: clsByOid.get(e.outlookId) } : e);
+  const assignments = notionRows.filter(r => !r.fromOutlook);   // 배정·직접 등록 일정
+  const events = outlookEvents.concat(assignments);
+
+  const failedIds = new Set(outlook.failedMemberIds || []);
+  const members = roster.map(m => {
+    const availDays = days.filter(d => isMemberAvailableOn(events, m.id, d, sT, eT));
+    const available = days.length > 0 && availDays.length === days.length;
+    const urgent = available && days.some(d => events.some(e =>
+      e.memberId === m.id && e.date === d &&
+      (e.isAllDay || eventsOverlap(sT, eT, e.startTime || '09:00', e.endTime || '18:00')) &&
+      classifyAvailability(e) === 'urgent'));
+    return {
+      ...m, available, urgent,
+      availableDates: availDays,
+      reasons: available ? [] : buildUnavailReasons(events, m.id, days, sT, eT),
+      // 아웃룩 조회에 실패한 멤버는 판정을 신뢰할 수 없음을 명시
+      stale: failedIds.has(m.id),
+    };
+  });
+
+  // 이 기간에 이미 배정된 사람 / 기간 전체가 배정된 사람(= 룰렛 잠금 대상)
+  const byMember = {};
+  assignments.filter(e => e.type === 'deploy' && days.includes(e.date))
+    .forEach(e => { (byMember[e.memberId] = byMember[e.memberId] || new Set()).add(e.date); });
+  const assigned = Object.entries(byMember).map(([id, set]) => ({
+    memberId: Number(id),
+    name: (roster.find(r => r.id === Number(id)) || {}).name || `#${id}`,
+    dates: [...set].sort(),
+    full: days.length > 0 && days.every(d => set.has(d)),
+  }));
+
+  return {
+    ok: true,
+    range: { startDate, endDate, startTime: sT, endTime: eT },
+    weekdays: days,
+    members,
+    assigned,
+    fullyAssignedBy: assigned.filter(a => a.full).map(a => a.name),
+    failedMembers: (outlook.failed || []).map(f => f.name),
+    computedAt: new Date().toISOString(),
+  };
+}
+
+// 아웃룩 조회 결과 단기 캐시 — 날짜/시간을 바꿔가며 여러 번 조회할 때 Graph 왕복을 줄인다.
+// 같은 isolate 안에서만 유효하고 TTL이 짧아, 최신성이 크게 떨어지지 않는다.
+const OUTLOOK_TTL_MS = 3 * 60 * 1000;
+const outlookCache = new Map();   // "start~end" → {at, data}
+
+async function cachedSyncOutlook(env, startDate, endDate) {
+  const key = `${startDate}~${endDate}`;
+  const hit = outlookCache.get(key);
+  if (hit && Date.now() - hit.at < OUTLOOK_TTL_MS) return hit.data;
+  const data = await syncOutlook(env, startDate, endDate);
+  outlookCache.set(key, { at: Date.now(), data });
+  if (outlookCache.size > 20) outlookCache.delete(outlookCache.keys().next().value);
+  return data;
+}
+
+// 멤버 명단 — 서버(환경변수)가 유일한 기준.
+// ⚠️ 과거엔 프론트의 '추가 인원' 토글이 PC별 localStorage에 저장돼,
+//    같은 날 운영자마다 후보군(8명/11명)이 달랐다. 이제 서버가 결정한다.
+function buildRoster(env) {
+  const emails = JSON.parse(env.MEMBER_EMAILS || '{}');
+  const ids    = JSON.parse(env.MEMBER_IDS    || '{}');
+  const includeExtra = String(env.INCLUDE_EXTRA ?? '0') === '1';
+  const extraIds = new Set(Object.values(EXTRA_MEMBERS).map(([, id]) => id));
+  for (const [nm,[em,eid]] of Object.entries(EXTRA_MEMBERS)) {
+    if (!emails[nm]) emails[nm] = em;
+    if (!ids[nm])    ids[nm]    = eid;
+  }
+  return Object.keys(emails)
+    .filter(nm => ids[nm])
+    .map(nm => ({ id: ids[nm], name: nm, extra: extraIds.has(ids[nm]) }))
+    .filter(m => includeExtra || !m.extra)
+    .sort((a,b) => a.id - b.id);
+}
+
+// ── 배정 통계 (요구사항 §4-3 "공정성을 수치로 증명") ──────────────────────
+// [취소]·[초기화] 로그는 멤버ID가 없어 자연히 제외된다.
+// from/to로 기간을 좁히면 초기 테스트 스핀을 걸러낼 수 있다.
+async function buildStats(env, { from, to } = {}) {
+  if (!env.NOTION_SECRET || !env.SPINLOG_DB_ID) throw new Error('Notion 미설정');
+  const rows = [];
+  let cursor;
+  for (let page = 0; page < 50; page++) {
+    const payload = { sorts:[{timestamp:'created_time',direction:'descending'}], page_size:100 };
+    if (cursor) payload.start_cursor = cursor;
+    const res = await notion(env,'POST',`/databases/${env.SPINLOG_DB_ID}/query`,payload);
+    const d = await res.json();
+    rows.push(...(d.results||[]));
+    if (!d.has_more || !d.next_cursor) break;
+    cursor = d.next_cursor;
+  }
+  const logs = rows.map(p => {
+    const pr = p.properties || {};
+    return {
+      id: p.id,
+      name: getNotionText(pr,'이름'),
+      targetDate: pr['날짜']?.date?.start || '',
+      memberId: pr['멤버ID']?.number ?? null,
+      createdTime: p.created_time,
+    };
+  });
+
+  const roster = buildRoster(env);
+  const inRange = l => (!from || l.createdTime.slice(0,10) >= from)
+                    && (!to   || l.createdTime.slice(0,10) <= to);
+  const valid = logs.filter(l => l.memberId != null && inRange(l));
+
+  const byId = {};
+  valid.forEach(l => {
+    const s = byId[l.memberId] = byId[l.memberId] || { count:0, last:null, dates:[] };
+    s.count++;
+    s.dates.push(l.targetDate || l.createdTime.slice(0,10));
+    if (!s.last || l.createdTime > s.last) s.last = l.createdTime;
+  });
+
+  const total = valid.length;
+  const members = roster.map(m => {
+    const s = byId[m.id] || { count:0, last:null, dates:[] };
+    return {
+      id:m.id, name:m.name, extra:m.extra,
+      count:s.count,
+      share: total ? Math.round(s.count / total * 1000) / 10 : 0,   // 비율(%) 소수 1자리
+      lastAssigned: s.last ? s.last.slice(0,10) : null,
+      dates: s.dates.sort(),
+    };
+  }).sort((a,b) => b.count - a.count || a.name.localeCompare(b.name,'ko'));
+
+  // 쏠림 지표: 최다/최소 격차와 평균 대비 편차
+  const counts = members.map(m => m.count);
+  const avg = counts.length ? total / counts.length : 0;
+  return {
+    ok:true,
+    range: { from: from || null, to: to || null },
+    total,
+    cancelledOrReset: logs.filter(l => l.memberId == null && inRange(l)).length,
+    members,
+    fairness: {
+      average: Math.round(avg * 10) / 10,
+      max: counts.length ? Math.max(...counts) : 0,
+      min: counts.length ? Math.min(...counts) : 0,
+      neverAssigned: members.filter(m => m.count === 0).map(m => m.name),
+    },
+    computedAt: new Date().toISOString(),
+  };
+}
+
+// 추가 후보 3명 (ID 9·10·11) — 명단은 여기 한 곳에서만 관리
+const EXTRA_MEMBERS = {
+  '문병린': ['brmun@softcamp.co.kr', 9],
+  '문정일': ['jungil.moon@softcamp.co.kr', 10],
+  '양창호': ['chh.yang@softcamp.co.kr', 11],
+};
 
 // ── 아웃룩 동기화 핵심 로직 ──────────────────────────────────────────────
 async function syncOutlook(env, startDate, endDate) {
