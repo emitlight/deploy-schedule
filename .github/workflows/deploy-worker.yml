@@ -1,0 +1,49 @@
+# Cloudflare Worker 자동 배포
+#
+# 동작: main 브랜치에 cloudflare-worker.js 또는 wrangler.toml 이 변경되면 자동 배포.
+#
+# ⚠️ 사전 설정 (1회):
+#   GitHub 저장소 → Settings → Secrets and variables → Actions → New repository secret
+#     CLOUDFLARE_API_TOKEN : Cloudflare 대시보드 → My Profile → API Tokens →
+#                            "Edit Cloudflare Workers" 템플릿으로 생성
+#     CLOUDFLARE_ACCOUNT_ID: 432a7fd8cfc5ec28c1ea7fdf035c47f3
+#
+# ⚠️ --keep-vars 는 반드시 유지할 것.
+#    wrangler.toml 에 활성 [vars] 블록이 없으므로, 이 옵션 없이 배포하면
+#    대시보드에 등록된 환경변수가 전부 삭제되고 자동 동기화가 조용히 멈춘다.
+
+name: Deploy Worker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cloudflare-worker.js'
+      - 'wrangler.toml'
+      - '.github/workflows/deploy-worker.yml'
+  workflow_dispatch:   # 수동 실행 허용
+
+concurrency:
+  group: deploy-worker
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 문법 검사
+        run: |
+          cp cloudflare-worker.js /tmp/worker-check.mjs
+          node --check /tmp/worker-check.mjs
+
+      - name: Cloudflare 배포
+        run: npx --yes wrangler@4 deploy --keep-vars
+        env:
+          CLOUDFLARE_API_TOKEN:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

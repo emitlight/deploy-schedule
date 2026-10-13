@@ -1289,22 +1289,10 @@ function renderGrid() {
     return h * 60 + (m || 0);
   }
 
-  // 슬롯 인덱스(0-based)의 상단 누적 픽셀 계산
-  function slotTopPx(idx) {
-    let px = 0;
-    for (let k = 0; k < idx; k++) {
-      px += HOURS[k].endsWith(':30') ? ROW_HALF : ROW_FULL;
-    }
-    return px;
-  }
-
   // 시각(HH:MM) → 슬롯 상단에서의 픽셀 위치
   function timeToPx(timeStr) {
     const min = timeToMin(timeStr);
     if (min <= FIRST_MIN) return 0;
-    const totalMin = HOURS.reduce((acc, h, i) => {
-      if (i < HOURS.length - 1) return acc; return acc;
-    }, 0);
     // 어느 슬롯에 속하는지 찾아 보정
     let px = 0;
     for (let i = 0; i < HOURS.length - 1; i++) {
