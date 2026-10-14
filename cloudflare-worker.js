@@ -173,8 +173,12 @@ export default {
         // ── 후보 명단 설정 변경 (모든 PC 공유) ───────────────────────────
         case 'set-roster-config': {
           const saved = await writeSettings(env, { includeExtra: !!body?.includeExtra }, body?.by);
-          const cfg = await readSettings(env);
-          result = { ok:true, members: buildRoster(env, saved.includeExtra), config: cfg };
+          // ⚠️ 저장 직후 KV를 다시 읽으면 안 된다 — KV는 쓰기 반영에 최대 1분이 걸려
+          //    방금 쓴 값 대신 이전 값이 돌아오고, 화면이 되돌아간 것처럼 보인다.
+          //    방금 저장한 값을 그대로 응답한다.
+          result = { ok:true, members: buildRoster(env, saved.includeExtra),
+                     config: { includeExtra: saved.includeExtra, editable: true, source: 'kv',
+                               updatedAt: saved.updatedAt, updatedBy: saved.updatedBy } };
           break;
         }
 
@@ -341,6 +345,9 @@ export default {
               createdTime:p.created_time,
             };
           });
+          // 각 이력이 '실제 배정'까지 갔는지 확인 — 연결된 배포 일정이 있으면 완료로 본다.
+          // (추첨만 하고 저장하지 않은 건과 구분하기 위함)
+          await annotateSpinLogs(env, logs);
           result={ok:true,logs}; break;
         }
 
@@ -828,6 +835,67 @@ function buildRoster(env, includeExtraOverride) {
     .map(nm => ({ id: ids[nm], name: nm, extra: extraIds.has(ids[nm]) }))
     .filter(m => includeExtra || !m.extra)
     .sort((a,b) => a.id - b.id);
+}
+
+// ── 스핀 이력에 '실제 배정 완료' 여부 표시 ────────────────────────────────
+// 스핀 이력(SPINLOG)은 '추첨했다'는 기록일 뿐이라, 배정 모달에서 저장을 누르지 않으면
+// 일정이 만들어지지 않는다. 운영자가 둘을 구분할 수 있도록 배포 일정과 대조한다.
+//   · 1순위: 배포 일정의 '스핀로그ID' 가 이력 id 와 일치
+//   · 2순위(구 기록 호환): 같은 멤버 + 이력의 대상 기간 안에 배포 일정이 존재
+async function annotateSpinLogs(env, logs) {
+  if (!env.SCHEDULES_DB_ID || logs.length === 0) return logs;
+  let deploys = [];
+  try {
+    const pages = [];
+    let cursor;
+    for (let i = 0; i < 20; i++) {
+      const payload = { page_size: 100, filter: { and: [
+        { property: '타입',     select:   { equals: 'deploy' } },
+        { property: '아웃룩여부', checkbox: { equals: false } },
+      ] } };
+      if (cursor) payload.start_cursor = cursor;
+      const res = await notion(env, 'POST', `/databases/${env.SCHEDULES_DB_ID}/query`, payload);
+      const d = await res.json();
+      pages.push(...(d.results || []));
+      if (!d.has_more || !d.next_cursor) break;
+      cursor = d.next_cursor;
+    }
+    deploys = pages.map(parseNotionSchedule).filter(Boolean);
+  } catch (e) {
+    console.error('[spinlog] 배포 일정 대조 실패:', e.message);
+    return logs;   // 대조 실패 시 표시를 생략할 뿐, 이력 자체는 그대로 반환
+  }
+
+  const bySpinId = new Map();
+  for (const ev of deploys) {
+    if (!ev.spinLogPageId) continue;
+    const k = ev.spinLogPageId.replace(/-/g, '');
+    (bySpinId.get(k) || bySpinId.set(k, []).get(k)).push(ev);
+  }
+
+  for (const log of logs) {
+    if (log.memberId == null) continue;                    // [취소]·[초기화] 는 대상 아님
+    let matched = bySpinId.get(String(log.id).replace(/-/g, '')) || [];
+    if (matched.length === 0) {
+      // 구 기록 호환: 멤버와 기간으로 추정
+      const m = (log.spunAt || '').match(/기간\s+(\d{4}-\d{2}-\d{2})\s*~\s*(\d{4}-\d{2}-\d{2})/);
+      const from = m ? m[1] : log.targetDate;
+      const to   = m ? m[2] : log.targetDate;
+      if (from) matched = deploys.filter(ev =>
+        ev.memberId === log.memberId && ev.date >= from && ev.date <= to);
+    }
+    if (matched.length > 0) {
+      const dates = matched.map(e => e.date).sort();
+      log.confirmed      = true;
+      log.confirmedDays  = dates.length;
+      log.confirmedRange = dates[0] === dates[dates.length - 1]
+        ? dates[0] : `${dates[0]}~${dates[dates.length - 1]}`;
+      log.eventTitle     = matched[0].title || '';
+    } else {
+      log.confirmed = false;
+    }
+  }
+  return logs;
 }
 
 // ── 배정 통계 (요구사항 §4-3 "공정성을 수치로 증명") ──────────────────────

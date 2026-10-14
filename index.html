@@ -443,6 +443,13 @@
   .rr-unavail-reasons .ur-title { font-weight: 700; color: #e65100; margin-bottom: 3px; }
   .rr-unavail-reasons .ur-row { line-height: 1.6; }
   .rr-unavail-reasons .ur-name { font-weight: 700; color: #4e342e; margin-right: 4px; }
+  /* 이미 배정된 사람이 있을 때의 안내 (차단이 아니라 정보) */
+  .rr-assigned-notice {
+    font-size: 11px; background: #eef4ff; border: 1px solid #c5d6f5;
+    border-radius: 8px; padding: 7px 10px; margin-bottom: 8px;
+  }
+  .rr-assigned-notice .ra-title { display: block; color: #1a3a7a; font-weight: 600; }
+  .rr-assigned-notice .ra-sub   { display: block; color: #5b6b8c; margin-top: 2px; }
   .rr-rule-note {
     text-align: center; font-size: 11px; color: #7986cb;
     background: #f3f4ff; border-radius: 8px; padding: 5px 10px;
@@ -1004,6 +1011,7 @@
         <div class="rr-queue" id="rrQueue"></div>
       </div>
       <div class="rr-unavail-reasons" id="rrUnavailReasons"></div>
+      <div class="rr-assigned-notice" id="rrAssignedNotice" style="display:none;"></div>
       <div class="rr-rule-note">
         🎲 배포 가능한 인원 중 <strong>동일한 확률</strong>로 추첨합니다 · 배정 이력은 📋 스핀 이력에 기록됩니다
       </div>
@@ -1158,11 +1166,13 @@ async function toggleExtra() {
   if (btn) { btn.disabled = true; btn.textContent = '⏳ 변경 중…'; }
   try {
     const r = await workerPost('set-roster-config', { includeExtra: next, by: '대시보드' });
-    if (!r || !r.ok) throw new Error('저장 실패');
+    if (!r || !r.ok) throw new Error(r && r.error ? r.error : '저장 실패');
+    // 안내를 먼저 띄운다 — 뒤의 렌더링에서 문제가 생겨도 결과는 전달되도록
+    const n = Array.isArray(r.members) ? r.members.length : pool().length;
+    showToast(r.config && r.config.includeExtra
+      ? `➕ 추가 인원 3명 포함 — 후보 ${n}명 · 모든 PC 반영됨`
+      : `➖ 추가 인원 제외 — 후보 ${n}명 · 모든 PC 반영됨`);
     applyRosterResponse(r);
-    showToast(next
-      ? `➕ 추가 인원 3명(문병린·문정일·양창호)을 후보에 포함했습니다 — 모든 PC 반영`
-      : `➖ 추가 인원을 제외했습니다 (후보 ${serverRoster.length}명) — 모든 PC 반영`);
     // 명단이 바뀌었으므로 우선순위와 열려 있는 룰렛을 다시 계산
     await loadRrOrderFromNotion();
     if (document.getElementById('rouletteModal')?.classList.contains('open')) {
@@ -2222,6 +2232,7 @@ function getDepRange() {
 let spinning     = false;
 let wheelRot     = 0;
 let wheelSlices  = [];
+let alreadyAssignedNames = [];   // 선택 기간에 이미 배정된 담당자 (차단용 아님 — 확인용)
 let lastWinner      = null;
 let currentWinner   = null;  // 이번 모달 세션 잠금 당첨자 (배정 확정 전까지 고정)
 let lastSpinLogPageId = null;  // 마지막 스핀의 Notion pageId (배포 취소 시 삭제용)
@@ -2554,13 +2565,27 @@ function refreshRoulette() {
       .filter(([, ds]) => _depDates.length > 0 && _depDates.every(d => ds.has(d)))
       .map(([id]) => (ALL().find(m => m.id === Number(id)) || {}).name).filter(Boolean);
   }
-  if (_assigned.length > 0) {
-    spinBtnEl.disabled = true;
-    spinBtnEl.textContent = '⛔ 이미 배정됨 — 취소 후 가능';
-    const banner = document.getElementById('resultBanner');
-    banner.className = 'result-banner show warn';   // 주황 경고(초록 성공색과 구분)
-    banner.innerHTML = `⚠️ 이 기간엔 이미 <b>${_assigned.join(', ')}</b> 배정됨<br><span style="font-size:12px;font-weight:400;">재배정하려면 📋 스핀 이력 탭에서 '배정 취소' 후 다시 돌려주세요</span>`;
-    document.getElementById('assignDeployBtn').className = 'assign-deploy-btn';  // 배정 버튼 숨김
+  // 이미 배정된 사람이 있어도 '추가 배정'이 필요할 수 있으므로 막지 않는다.
+  // 과거엔 버튼을 비활성화해 아예 돌릴 수 없게 했는데, 2명 투입 같은 정상 상황까지 가로막았다.
+  // 이제는 눈에 띄게 알려주기만 하고, 실제 배정 확정 시 한 번 더 확인한다.
+  alreadyAssignedNames = _assigned;
+  const noticeEl = document.getElementById('rrAssignedNotice');
+  if (noticeEl) {
+    if (_assigned.length > 0 && wheelSlices.length > 0) {
+      noticeEl.style.display = 'block';
+      noticeEl.innerHTML =
+        `<span class="ra-title">ℹ️ 이 기간엔 이미 <b>${_assigned.join(', ')}</b> 님이 배정돼 있습니다</span>` +
+        `<span class="ra-sub">추가로 투입하려면 그대로 돌리시고, 교체하려면 📋 스핀 이력에서 '배정 취소' 후 돌려주세요</span>`;
+    } else if (_assigned.length > 0) {
+      // 배정자는 있는데 가용 인원이 0명 → 돌릴 대상이 없음
+      noticeEl.style.display = 'block';
+      noticeEl.innerHTML =
+        `<span class="ra-title">ℹ️ 이 기간엔 이미 <b>${_assigned.join(', ')}</b> 님이 배정돼 있고, 추가로 가능한 인원이 없습니다</span>` +
+        `<span class="ra-sub">기간·시간을 바꾸거나 📋 스핀 이력에서 '배정 취소' 후 다시 시도해 주세요</span>`;
+    } else {
+      noticeEl.style.display = 'none';
+      noticeEl.innerHTML = '';
+    }
   }
 
   renderAvailableMembers();
@@ -2901,7 +2926,16 @@ function renderHistory() {
     } else if (isReset) {
       nameCell = `<span style="color:#999;">${clean}</span> <span style="font-size:10px;color:#888;">초기화</span>`;
     } else {
-      nameCell = clean;
+      // 추첨만 한 기록과 실제로 일정까지 등록된 기록을 구분해 표시한다.
+      // (서버가 배포 일정과 대조해 confirmed 를 채워 준다)
+      const badge = h.confirmed === true
+        ? `<span style="font-size:10px;color:#2e7d32;background:#e8f5e9;border:1px solid #c8e6c9;border-radius:4px;padding:1px 5px;margin-left:4px;white-space:nowrap;"
+             title="배포 일정이 등록된 건입니다${h.confirmedRange ? ` (${h.confirmedRange}${h.confirmedDays > 1 ? `, ${h.confirmedDays}일` : ''})` : ''}">✅ 배정 완료</span>`
+        : h.confirmed === false
+          ? `<span style="font-size:10px;color:#8a5a00;background:#fff8ec;border:1px solid #f0d9a8;border-radius:4px;padding:1px 5px;margin-left:4px;white-space:nowrap;"
+               title="추첨 기록만 있고 배포 일정이 없습니다. 배정 모달에서 저장하지 않았을 수 있습니다.">추첨만 됨</span>`
+          : '';
+      nameCell = `${clean}${badge}`;
       actions = `<button onclick="sendHistoryMailById('${h.id}')" title="담당자에게 배정 메일 작성" style="${mailSt}">✉️</button>`
               + `<button onclick="cancelAssignment('${h.id}','${clean}')" title="배정 취소 — 이력은 남기고 우선순위 복구" style="${cancelSt}">🚫 배정 취소</button>`;
     }
@@ -3085,6 +3119,15 @@ async function loadStats() {
 function assignFromWheel() {
   if (!lastWinner) return;
   const confirmed = lastWinner;
+
+  // 이미 배정된 사람이 있는 기간이면 '추가 투입'임을 한 번 확인한다 (실수 방지)
+  if (alreadyAssignedNames.length > 0) {
+    const r = getDepRange();
+    if (!confirm(
+      `이 기간(${r.label})에는 이미 ${alreadyAssignedNames.join(', ')} 님이 배정돼 있습니다.\n\n` +
+      `${confirmed.name} 님을 추가로 투입할까요?\n\n` +
+      `· 교체하려는 경우라면 '취소'를 누르고, 📋 스핀 이력에서 기존 배정을 먼저 취소해 주세요.`)) return;
+  }
 
   // ✅ 배정 확정 — pendingWinner 삭제 (잠금 해제)
   localStorage.removeItem('pendingWinner');
