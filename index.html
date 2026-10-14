@@ -1093,13 +1093,13 @@ let authPromptOpen = false;   // 여러 요청이 동시에 401을 받아도 프
     const res = await _origFetch(input, init);
     if (isWorker && res.status === 401 && !authPromptOpen) {
       authPromptOpen = true;
-      const pw = prompt('🔑 이 대시보드 접근 비밀번호를 입력하세요 (관리자에게 문의)');
+      const pw = prompt('🔑 이 대시보드 접근 비밀번호를 입력하세요 (관리자에게 문의)\n관리자: hayoung.lee@softcamp.co.kr');
       if (pw) { localStorage.setItem('appPassword', pw); location.reload(); }
       else    { localStorage.removeItem('appPassword'); authPromptOpen = false; }
     }
     if (isWorker && res.status === 503) {
       // 서버에 APP_PASSWORD가 아직 설정되지 않은 상태 — 관리자 조치 필요
-      try { showToast('⚠️ 서버 설정 미완료 — 관리자에게 APP_PASSWORD 설정을 요청하세요'); } catch(_) {}
+      try { showToast('⚠️ 서버 설정 미완료 — 관리자에게 문의하세요 (hayoung.lee@softcamp.co.kr)'); } catch(_) {}
     }
     return res;
   };
