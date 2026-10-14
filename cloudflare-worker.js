@@ -34,13 +34,19 @@ export default {
         message:'APP_PASSWORD 미설정 — 관리자가 `wrangler secret put APP_PASSWORD` 실행 필요' }),
         { status:503, headers:{ ...CORS, 'Content-Type':'application/json' } });
     }
-    if (!safeEqual(request.headers.get('X-Auth') || '', env.APP_PASSWORD)) {
+    // 액션은 헤더로만 수신 — ?action= 쿼리 경로 제거(주소창 GET 한 번으로 호출되던 문제 차단)
+    const action = request.headers.get('X-Action');
+    const auth   = request.headers.get('X-Auth') || '';
+
+    // 사람(대시보드)은 APP_PASSWORD, 기계(사내 동기화 스크립트)는 INGEST_TOKEN.
+    // 기계 토큰은 티켓 적재 한 가지만 할 수 있다(최소 권한) — 유출돼도 일정·이력을 건드릴 수 없다.
+    const isUser    = safeEqual(auth, env.APP_PASSWORD);
+    const isIngest  = !!env.INGEST_TOKEN && safeEqual(auth, env.INGEST_TOKEN);
+    const INGEST_ONLY_ACTIONS = new Set(['ingest-crm-tickets']);
+    if (!isUser && !(isIngest && INGEST_ONLY_ACTIONS.has(action))) {
       return new Response(JSON.stringify({ ok:false, error:'unauthorized' }),
         { status:401, headers:{ ...CORS, 'Content-Type':'application/json' } });
     }
-
-    // 액션은 헤더로만 수신 — ?action= 쿼리 경로 제거(주소창 GET 한 번으로 호출되던 문제 차단)
-    const action = request.headers.get('X-Action');
     const body   = ['POST','PATCH','DELETE'].includes(request.method)
                    ? await request.json().catch(()=>({})) : null;
     try {
@@ -160,6 +166,41 @@ export default {
         // ── 배정 컨텍스트 (가용 판정) — 모든 PC가 같은 답을 보는 단일 경로 ──
         case 'get-availability': {
           result = await buildAvailability(env, body || {});
+          break;
+        }
+
+        // ── CRM 배포지원요청 티켓 적재 (사내 동기화 스크립트가 호출) ─────
+        // Cloudflare에서 CRM(사내 10.x)에 직접 붙을 수 없어, 사내 서버가 밀어 넣는다.
+        case 'ingest-crm-tickets': {
+          if (!env.SETTINGS) throw Object.assign(new Error('KV(SETTINGS) 미설정'), { status: 501 });
+          const list = Array.isArray(body?.tickets) ? body.tickets : null;
+          if (!list) throw new Error('tickets 배열 필요');
+          if (list.length > 500) throw new Error('한 번에 500건까지');
+          const clean = list.map(t => ({
+            ticketId:   String(t.ticketId ?? ''),
+            ticketNo:   String(t.ticketNo ?? '').slice(0, 30),
+            title:      String(t.title ?? '').slice(0, 300),
+            status:     String(t.status ?? '').slice(0, 50),
+            assignee:   String(t.assignee ?? '').slice(0, 40),
+            account:    String(t.account ?? '').slice(0, 100),
+            requester:  String(t.requester ?? '').slice(0, 40),
+            projectCode:String(t.projectCode ?? '').slice(0, 50),
+            periodFrom: /^\d{4}-\d{2}-\d{2}$/.test(t.periodFrom || '') ? t.periodFrom : null,
+            periodTo:   /^\d{4}-\d{2}-\d{2}$/.test(t.periodTo   || '') ? t.periodTo   : null,
+            createdKst: String(t.createdKst ?? '').slice(0, 20),
+            url:        /^https?:\/\//.test(t.url || '') ? String(t.url).slice(0, 300) : '',
+          })).filter(t => t.ticketNo);
+          const payload = { tickets: clean, syncedAt: new Date().toISOString(),
+                            source: String(body.source || 'partnercenter').slice(0, 40) };
+          await env.SETTINGS.put(CRM_TICKETS_KEY, JSON.stringify(payload));
+          console.log(`[crm-tickets] ${clean.length}건 적재 (from ${payload.source})`);
+          result = { ok: true, stored: clean.length, syncedAt: payload.syncedAt };
+          break;
+        }
+
+        // ── CRM 배포지원요청 티켓 조회 (대시보드가 호출) ─────────────────
+        case 'get-crm-tickets': {
+          result = await readCrmTickets(env);
           break;
         }
 
@@ -781,7 +822,26 @@ async function cachedSyncOutlook(env, startDate, endDate) {
 // ── 공유 설정 (KV) ────────────────────────────────────────────────────────
 // 운영자가 화면에서 바꾸는 설정을 모든 PC가 함께 보도록 서버에 보관한다.
 // KV 바인딩(SETTINGS)이 없으면 환경변수 INCLUDE_EXTRA 를 읽기 전용으로 사용한다.
-const SETTINGS_KEY = 'roster-config';
+const SETTINGS_KEY    = 'roster-config';
+const CRM_TICKETS_KEY = 'crm-tickets';
+
+// CRM 티켓 목록 읽기 — 사내 동기화 스크립트가 넣어 둔 값을 그대로 돌려준다.
+// 동기화가 멈춰도 마지막 값은 남으므로, 얼마나 오래됐는지(ageHours)를 함께 알려 준다.
+async function readCrmTickets(env) {
+  if (!env.SETTINGS) return { ok: true, tickets: [], syncedAt: null, configured: false };
+  try {
+    const raw = await env.SETTINGS.get(CRM_TICKETS_KEY);
+    if (!raw) return { ok: true, tickets: [], syncedAt: null, configured: true };
+    const d = JSON.parse(raw);
+    const ageHours = d.syncedAt
+      ? Math.round((Date.now() - new Date(d.syncedAt).getTime()) / 36e5 * 10) / 10 : null;
+    return { ok: true, tickets: d.tickets || [], syncedAt: d.syncedAt || null,
+             source: d.source || null, ageHours, configured: true };
+  } catch (e) {
+    console.error('[crm-tickets] 읽기 실패:', e.message);
+    return { ok: true, tickets: [], syncedAt: null, configured: true, error: '읽기 실패' };
+  }
+}
 
 async function readSettings(env) {
   const fallback = { includeExtra: String(env.INCLUDE_EXTRA ?? '0') === '1' };
@@ -1232,6 +1292,7 @@ function parseNotionSchedule(page) {
     outlookId:  getNotionRichText(p,'아웃룩ID'),
     classification: p['배포분류']?.select?.name || null,  // 수동 분류 (가능/불가/긴급) — 모두 공유
     spinLogPageId:  getNotionRichText(p,'스핀로그ID') || null,  // 배정↔스핀이력 연결(모든 PC 공유)
+    ticketNo:       getNotionRichText(p,'티켓번호')   || null,  // 배정↔CRM 티켓 연결
   };
 }
 
@@ -1254,6 +1315,10 @@ function notionScheduleProps(d) {
   if (d.spinLogPageId !== undefined) {
     props['스핀로그ID'] = {rich_text:[{text:{content:d.spinLogPageId||''}}]};
   }
+  // CRM 배포지원요청 티켓 번호 — 티켓 목록에서 '배정 완료'를 판별하는 연결 고리
+  if (d.ticketNo !== undefined) {
+    props['티켓번호'] = {rich_text:[{text:{content:d.ticketNo||''}}]};
+  }
   return props;
 }
 
@@ -1263,9 +1328,9 @@ async function ensureSpinLogProp(env) {
   if (spinLogPropEnsured || !env.SCHEDULES_DB_ID) return;
   try {
     await notion(env,'PATCH',`/databases/${env.SCHEDULES_DB_ID}`,
-      {properties:{'스핀로그ID':{rich_text:{}}}});
+      {properties:{'스핀로그ID':{rich_text:{}}, '티켓번호':{rich_text:{}}}});
     spinLogPropEnsured = true;
-  } catch(e) { console.error('[schema] 스핀로그ID 속성 추가 실패:', e.message); }
+  } catch(e) { console.error('[schema] 속성 추가 실패:', e.message); }
 }
 
 function getNotionText(props,key){return props[key]?.title?.[0]?.text?.content||'';}

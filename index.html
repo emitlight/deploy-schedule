@@ -443,6 +443,46 @@
   .rr-unavail-reasons .ur-title { font-weight: 700; color: #e65100; margin-bottom: 3px; }
   .rr-unavail-reasons .ur-row { line-height: 1.6; }
   .rr-unavail-reasons .ur-name { font-weight: 700; color: #4e342e; margin-right: 4px; }
+  /* CRM 배포지원요청 티켓 리스트 (달력 위) */
+  .crm-tickets { margin: 0 auto 14px; max-width: 1400px; padding: 0 14px; }
+  .ct-head {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    font-size: 12px; font-weight: 700; color: #1a237e; margin-bottom: 8px;
+  }
+  .ct-head .ct-count {
+    background: #1a237e; color: #fff; border-radius: 10px;
+    padding: 1px 8px; font-size: 11px;
+  }
+  .ct-head .ct-sync { font-weight: 400; color: #9aa3b8; font-size: 11px; }
+  .ct-list { display: flex; gap: 10px; flex-wrap: wrap; }
+  .ct-card {
+    flex: 1 1 320px; max-width: 460px; background: #fff; border: 1px solid #d9e0f0;
+    border-left: 4px solid #3949ab; border-radius: 10px; padding: 10px 12px;
+  }
+  .ct-card.assigned { border-left-color: #2e7d32; background: #f8fcf8; }
+  .ct-card.urgent   { border-left-color: #e65100; }
+  .ct-no {
+    font-size: 11px; font-weight: 700; color: #3949ab;
+    text-decoration: none; border-bottom: 1px dotted #9fa8da;
+  }
+  .ct-badge {
+    font-size: 10px; border-radius: 4px; padding: 1px 6px; margin-left: 6px;
+    white-space: nowrap; border: 1px solid transparent;
+  }
+  .ct-badge.wait { background: #fff8ec; color: #8a5a00; border-color: #f0d9a8; }
+  .ct-badge.done { background: #e8f5e9; color: #2e7d32; border-color: #c8e6c9; }
+  .ct-title { font-size: 13px; font-weight: 600; color: #1a237e; margin: 5px 0 6px;
+              line-height: 1.35; word-break: break-all; }
+  .ct-meta  { font-size: 11px; color: #5a6782; line-height: 1.7; }
+  .ct-meta b { color: #37415c; font-weight: 600; }
+  .ct-actions { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .ct-btn {
+    font-size: 11px; font-weight: 600; padding: 5px 10px; border-radius: 6px;
+    border: 1px solid #c5cae9; background: #fff; color: #3949ab; cursor: pointer;
+  }
+  .ct-btn.primary { background: #3949ab; color: #fff; border-color: #3949ab; }
+  .ct-empty { font-size: 12px; color: #9aa3b8; padding: 6px 2px; }
+
   /* 이미 배정된 사람이 있을 때의 안내 (차단이 아니라 정보) */
   .rr-assigned-notice {
     font-size: 11px; background: #eef4ff; border: 1px solid #c5d6f5;
@@ -817,8 +857,11 @@
   <span style="margin-left:auto;font-size:11px;color:#aaa;">빈 셀 클릭 → 일정 추가 · 일정 클릭 → 수정/삭제</span>
 </div>
 
-<!-- Summary bar -->
+<!-- CRM 배포지원요청 티켓 (사내 동기화로 들어옴) -->
 <div style="height:16px"></div>
+<div class="crm-tickets" id="crmTickets" style="display:none;"></div>
+
+<!-- Summary bar -->
 <div class="summary-bar" id="summaryBar"></div>
 
 <!-- Main Grid -->
@@ -1771,6 +1814,7 @@ function saveDeployEvent() {
   const created = days.map((d, i) => {
     const ev = { id:`ev_${uid}_${i}`, memberId, date:d, title, type:'deploy',
                  startTime:start, endTime:end, note:'',
+                 ticketNo: pendingTicket ? pendingTicket.ticketNo : null,   // CRM 티켓 연결
                  spinLogPageId: (i === 0 ? (lastSpinLogPageId || null) : null) };
     events.push(ev);
     return ev;
@@ -1840,24 +1884,38 @@ function saveDeployEvent() {
   }
 
   // 배포 담당자에게 메일 클라이언트 열기 (기간 표기)
-  openMailtoLink(memberName, rangeLabel, start, end, title);
+  openMailtoLink(memberName, rangeLabel, start, end, title, '', pendingTicket);
+  pendingTicket = null;        // 티켓 연결은 이번 배정에만 적용
+  renderCrmTickets();          // 티켓 카드를 '배정됨'으로 갱신
 }
 
 // ── 배포 담당자에게 메일 클라이언트 열기 (mailto) ──────────────────────
-function openMailtoLink(memberName, date, startTime, endTime, title, note = '') {
+function openMailtoLink(memberName, date, startTime, endTime, title, note = '', ticket = null) {
   const member = ALL().find(m => m.name === memberName);
   const toEmail = member?.email || '';
 
-  const subject = `[배포지원 배정] ${title} 담당자로 선정되셨습니다`;
+  // 티켓에서 시작한 배정이면 제목·본문에 고객사와 티켓번호를 넣어 받는 사람이 바로 알 수 있게 한다
+  const subjCore = ticket && ticket.account ? `${ticket.account} ${title}` : title;
+  const subject = `[배포지원 배정] ${subjCore} 담당자로 선정되셨습니다`;
   const lines = [];
   lines.push('안녕하세요, ' + memberName + '님');
   lines.push('');
   lines.push('아래 배포지원 일정의 담당자로 선정되셨습니다.');
   lines.push('');
   lines.push('■ 배포 내용: ' + title);
+  if (ticket) {
+    if (ticket.ticketNo)    lines.push('■ 배포지원요청티켓: ' + ticket.ticketNo);
+    if (ticket.account)     lines.push('■ 고객사: ' + ticket.account);
+    if (ticket.projectCode) lines.push('■ 프로젝트코드: ' + ticket.projectCode);
+  }
   lines.push('■ 날짜: ' + date);
   lines.push('■ 시간: ' + startTime + ' ~ ' + endTime);
   if (note) lines.push('■ 메모: ' + note);
+  if (ticket) {
+    lines.push('');
+    lines.push('자세한 사항은 배포관리요청서와 티켓을 확인 부탁드립니다.');
+    if (ticket.url) lines.push(ticket.url);
+  }
   lines.push('');
   lines.push('일정 확인 후 문의사항은 파트너프로그램팀(ps2@softcamp.co.kr)에게 연락해 주세요.');
   lines.push('');
@@ -2086,8 +2144,108 @@ async function loadEventsFromNotion() {
   const today = fmtDate(new Date());
   await Promise.all([
     loadServerRoster(),
+    loadCrmTickets(),
     refreshSharedData(addDaysStr(today, -7), addDaysStr(today, SYNC_AHEAD_DAYS), { silent: true }),
   ]);
+  renderCrmTickets();   // 일정이 로드된 뒤 '배정됨' 표시를 다시 계산
+}
+
+// ── CRM 배포지원요청 티켓 ────────────────────────────────────────────────
+// CRM은 사내망에만 있어 브라우저·Worker가 직접 못 붙는다.
+// 사내 서버가 하루 1회 밀어 넣은 목록을 Worker에서 읽어와 달력 위에 보여준다.
+let crmTickets = [];       // [{ticketNo, title, status, assignee, account, periodFrom, periodTo, ...}]
+let crmSyncInfo = null;    // {syncedAt, ageHours, source, configured}
+
+async function loadCrmTickets() {
+  if (!WORKER_URL) return;
+  try {
+    const r = await workerPost('get-crm-tickets');
+    if (r && r.ok) {
+      crmTickets = Array.isArray(r.tickets) ? r.tickets : [];
+      crmSyncInfo = { syncedAt: r.syncedAt, ageHours: r.ageHours,
+                      source: r.source, configured: r.configured !== false };
+      renderCrmTickets();
+    }
+  } catch (_) { /* 실패 시 영역 미표시 */ }
+}
+
+// 이 티켓으로 이미 배정이 잡혔는지 — 배정 일정에 저장된 티켓번호로 판별
+function ticketAssignment(ticketNo) {
+  if (!ticketNo) return null;
+  const rows = events.filter(e => e.type === 'deploy' && !e.fromOutlook && e.ticketNo === ticketNo);
+  if (rows.length === 0) return null;
+  const dates = rows.map(e => e.date).sort();
+  const m = ALL().find(x => x.id === rows[0].memberId);
+  return { name: m ? m.name : `#${rows[0].memberId}`, from: dates[0], to: dates[dates.length - 1],
+           days: dates.length };
+}
+
+function renderCrmTickets() {
+  const box = document.getElementById('crmTickets');
+  if (!box) return;
+  if (!crmSyncInfo || !crmSyncInfo.configured) { box.style.display = 'none'; return; }
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
+    ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+
+  const sync = crmSyncInfo.syncedAt
+    ? `마지막 동기화 ${new Date(crmSyncInfo.syncedAt).toLocaleString('ko-KR')}` +
+      (crmSyncInfo.ageHours > 36 ? ` · ⚠️ ${Math.round(crmSyncInfo.ageHours / 24)}일 경과` : '')
+    : '아직 동기화된 적 없음';
+
+  if (crmTickets.length === 0) {
+    box.style.display = 'block';
+    box.innerHTML = `<div class="ct-head">📋 배포지원 요청 티켓
+      <span class="ct-sync">${esc(sync)}</span></div>
+      <div class="ct-empty">처리할 배포지원요청 티켓이 없습니다.</div>`;
+    return;
+  }
+
+  const cards = crmTickets.map(t => {
+    const a = ticketAssignment(t.ticketNo);
+    const period = t.periodFrom
+      ? `${t.periodFrom}${t.periodTo ? ` ~ ${t.periodTo}` : ''}`
+      : '<span style="color:#b0b7c9;">본문에 기재 없음</span>';
+    const badge = a
+      ? `<span class="ct-badge done">✅ ${esc(a.name)} 배정됨</span>`
+      : `<span class="ct-badge wait">배정 필요</span>`;
+    return `<div class="ct-card ${a ? 'assigned' : ''}">
+      <div>
+        ${t.url ? `<a class="ct-no" href="${esc(t.url)}" target="_blank" rel="noopener">${esc(t.ticketNo)}</a>`
+                : `<span class="ct-no">${esc(t.ticketNo)}</span>`}
+        ${badge}
+      </div>
+      <div class="ct-title">${esc(t.title)}</div>
+      <div class="ct-meta">
+        <b>고객사</b> ${esc(t.account || '-')} · <b>담당</b> ${esc(t.assignee || '-')}<br>
+        <b>요청 기간</b> ${period}<br>
+        <b>접수</b> ${esc(t.createdKst || '-')}${t.requester ? ` · <b>요청자</b> ${esc(t.requester)}` : ''}
+        ${t.projectCode ? `<br><b>프로젝트</b> ${esc(t.projectCode)}` : ''}
+      </div>
+      <div class="ct-actions">
+        ${a
+          ? `<span class="ct-meta">${esc(a.from)} ~ ${esc(a.to)} (${a.days}일)</span>`
+          : `<button class="ct-btn primary" onclick="assignFromTicket('${esc(t.ticketNo)}')">🎲 이 티켓으로 배정</button>`}
+      </div>
+    </div>`;
+  }).join('');
+
+  box.style.display = 'block';
+  box.innerHTML = `<div class="ct-head">📋 배포지원 요청 티켓
+      <span class="ct-count">${crmTickets.length}</span>
+      <span class="ct-sync">${esc(sync)}</span></div>
+    <div class="ct-list">${cards}</div>`;
+}
+
+// 티켓 카드에서 바로 배정 시작 — 기간·제목·티켓번호를 룰렛에 미리 채운다
+async function assignFromTicket(ticketNo) {
+  const t = crmTickets.find(x => x.ticketNo === ticketNo);
+  if (!t) return;
+  pendingTicket = t;                                  // 배정 확정 시 일정에 티켓번호를 남기기 위해 보관
+  const ds = document.getElementById('rDepDateStart');
+  const de = document.getElementById('rDepDateEnd');
+  if (t.periodFrom) { ds.value = t.periodFrom; de.value = t.periodTo || t.periodFrom; }
+  else showToast('티켓 본문에 요청 기간이 없어 날짜는 직접 지정해 주세요');
+  await openRoulette();
 }
 
 // 멤버 명단을 서버에서 받아 모든 PC가 같은 후보군을 보도록 맞춘다 (외부 API 호출 없는 가벼운 요청)
@@ -2233,6 +2391,7 @@ let spinning     = false;
 let wheelRot     = 0;
 let wheelSlices  = [];
 let alreadyAssignedNames = [];   // 선택 기간에 이미 배정된 담당자 (차단용 아님 — 확인용)
+let pendingTicket = null;        // 티켓 카드에서 배정을 시작한 경우 그 티켓 (일정에 번호를 남김)
 let lastWinner      = null;
 let currentWinner   = null;  // 이번 모달 세션 잠금 당첨자 (배정 확정 전까지 고정)
 let lastSpinLogPageId = null;  // 마지막 스핀의 Notion pageId (배포 취소 시 삭제용)

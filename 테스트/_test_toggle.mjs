@@ -14,7 +14,7 @@ const cut = (src, n) => {
   }
 };
 const code = [
-  wsrc.match(/const SETTINGS_KEY = [^;]*;/)[0],
+  wsrc.match(/const SETTINGS_KEY\s*=\s*[^;]*;/)[0],
   wsrc.match(/const EXTRA_MEMBERS = \{[\s\S]*?\};/)[0],
   cut(wsrc, 'readSettings'), cut(wsrc, 'writeSettings'), cut(wsrc, 'buildRoster'),
   'export { readSettings, writeSettings, buildRoster };',
