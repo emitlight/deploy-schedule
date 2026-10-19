@@ -1266,9 +1266,9 @@
         <span style="color:#aaa;font-size:12px;">~</span>
         <input type="date" id="rDepDateEnd" onchange="onRouletteRangeChange()"
           style="border:1px solid #c5cae9;border-radius:6px;padding:4px 8px;font-size:12px;color:#1a237e;" />
-        <select id="rDepStart" onchange="refreshRoulette()"></select>
+        <select id="rDepStart" onchange="onRouletteRangeChange()"></select>
         <span style="color:#aaa;font-size:12px;">~</span>
-        <select id="rDepEnd" onchange="refreshRoulette()"></select>
+        <select id="rDepEnd" onchange="onRouletteRangeChange()"></select>
       </div>
       <p class="rr-info" id="rrInfo"></p>
       <div class="rr-queue-section">
@@ -1349,6 +1349,18 @@
 // ✏️ Cloudflare Worker 배포 후 아래 URL을 교체하세요
 // 기본값 = 운영 Worker (미설정 PC도 공유 데이터에 바로 접속 — PC마다 다르게 보이던 원인 중 하나)
 const WORKER_URL = localStorage.getItem('workerUrl') || 'https://deploycalendar.hayoung-lee.workers.dev';
+
+// ── 화면에 넣는 외부 문자열 이스케이프 (보안 검토 필요) ──────────────────────
+// 아웃룩 일정 제목은 외부인이 보낸 초대로도 들어온다. 그대로 innerHTML에 넣으면
+// 제목에 심은 스크립트가 실행돼 저장된 접근 비밀번호가 유출될 수 있다.
+function escHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g,
+    c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+}
+// onclick="fn(${jsArg(x)})" 처럼 속성 안의 JS 인자로 넣을 때 사용.
+// 속성 값은 브라우저가 HTML 엔티티를 먼저 풀기 때문에 HTML 이스케이프만으로는 JS 문자열 탈출을 못 막는다
+// → JSON 문자열로 만든 뒤 HTML 이스케이프한다.
+function jsArg(s) { return escHtml(JSON.stringify(String(s ?? ''))); }
 
 // ── Worker 호출 보안: 접근 비밀번호(X-Auth) 자동 첨부 + 401 재입력 / 503 안내 ──
 // 서버는 APP_PASSWORD 미설정 시 503(fail-closed)으로 전면 차단한다.
@@ -1646,8 +1658,8 @@ function renderGrid() {
       const isOutlook = !!ev.fromOutlook;
       html += `<div class="allday-event ${cls}${isOutlook?' from-outlook':''}"
         onclick="editEvent(event,${events.indexOf(ev)})"
-        title="${ev.title}${ev.note?'\n'+ev.note:''}${isOutlook?'\n[아웃룩 연동]':''}">
-        ${ev.title}${isOutlook?'<span class="outlook-badge">OL</span>':''}
+        title="${escHtml(ev.title)}${ev.note?'\n'+escHtml(ev.note):''}${isOutlook?'\n[아웃룩 연동]':''}">
+        ${escHtml(ev.title)}${isOutlook?'<span class="outlook-badge">OL</span>':''}
       </div>`;
     });
     html += `</div>`;
@@ -1732,9 +1744,9 @@ function renderGrid() {
       html += `<div class="timed-event-block ${cls}${isOutlook?' from-outlook':''}"
         style="top:${top}px; height:${height}px; left:${leftCss}; width:${widthCss}; right:auto;"
         onclick="editEvent(event,${events.indexOf(ev)})"
-        title="${ev.title}${ev.note?'\n'+ev.note:''}${isOutlook?'\n[아웃룩 연동]':''}">
-        <span class="event-time">${clippedTop?'◀':''} ${timeLabel} ${clippedBot?'▶':''}${isOutlook?'<span class="outlook-badge">OL</span>':''}</span>
-        ${ev.title}
+        title="${escHtml(ev.title)}${ev.note?'\n'+escHtml(ev.note):''}${isOutlook?'\n[아웃룩 연동]':''}">
+        <span class="event-time">${clippedTop?'◀':''} ${escHtml(timeLabel)} ${clippedBot?'▶':''}${isOutlook?'<span class="outlook-badge">OL</span>':''}</span>
+        ${escHtml(ev.title)}
       </div>`;
     });
     html += `</div>`;
@@ -1860,7 +1872,8 @@ function openEventModal(memberId, date, startTime, ev=null) {
   const ovGroup = document.getElementById('overrideGroup');
   if (ev) {
     ovGroup.style.display = '';
-    const cur = tagOverrides[ev.id];
+    // 다른 PC에서 지정해 Notion에 저장된 분류가 우선 — 과거엔 이 PC 값만 봐서 '자동'으로 보였다
+    const cur = CLS_FROM_KR[ev.classification] || tagOverrides[ev.id];
     document.getElementById('fOverride').value =
       (cur === 'available' || cur === 'blocking' || cur === 'urgent') ? cur : 'auto';
   } else {
@@ -1917,6 +1930,9 @@ function saveEvent() {
     if (idx !== -1) {
       const old = events[idx];
       if (old.pageId) ev.pageId = old.pageId;
+      // 입력창에 없는 정보는 기존 값을 유지 — 과거엔 수정하면 티켓 연결·하루종일·분류가 사라졌다
+      for (const k of ['ticketNo', 'isAllDay', 'fromOutlook', 'outlookId', 'classification'])
+        if (old[k] !== undefined && ev[k] === undefined) ev[k] = old[k];
       // 배포 일정 담당자 변경 → 구 spinLog 삭제 + 신규 담당자 spinLog 추가
       if (ev.type === 'deploy' && old.memberId !== ev.memberId && WORKER_URL) {
         const newMember = ALL().find(m => m.id === ev.memberId);
@@ -1973,12 +1989,22 @@ function deleteEvent() {
   if (!editingId) return;
   if (!confirm('이 일정을 삭제할까요? 되돌릴 수 없습니다.')) return;
   const target = events.find(x => x.id === editingId);
+  // 여러 날 배정 중 하루만 지우는 경우: 배정 자체는 남아 있으므로 기록을 지우지 않고
+  // 연결 ID를 남은 날 중 첫날로 옮긴다. (과거엔 하루만 지워도 배정 기록 전체가 사라졌다)
+  const siblings = (target?.type === 'deploy' && target?.spinLogPageId)
+    ? linkedDeployEvents(target.spinLogPageId).filter(e => e.id !== target.id)
+                                               .sort((a, b) => a.date < b.date ? -1 : 1)
+    : [];
   events = events.filter(x => x.id !== editingId);
+  if (siblings.length) {
+    siblings[0].spinLogPageId = target.spinLogPageId;
+    saveEventToNotion(siblings[0]);
+  }
   saveData(); closeModal(); render(); showToast('일정이 삭제되었습니다');
   // Notion 이벤트 삭제
   if (target?.pageId) deleteEventFromNotion(target.pageId);
-  // 배포 일정 삭제 → 연결된 spinLog 삭제 → 우선순위 복구
-  if (target?.type === 'deploy' && target?.spinLogPageId && WORKER_URL) {
+  // 배포 일정 삭제 → 연결된 spinLog 삭제 → 우선순위 복구 (남은 날이 없을 때만)
+  if (target?.type === 'deploy' && target?.spinLogPageId && !siblings.length && WORKER_URL) {
     fetch(WORKER_URL, {
       method: 'POST',
       headers: {'Content-Type':'application/json','X-Action':'delete-spinlog'},
@@ -1991,6 +2017,7 @@ function deleteEvent() {
 
 // ─── Deploy Modal ─────────────────────────────────────────────────────────
 function openDeployModal() {
+  clearAssignmentDraft();   // 상단 '직접 투입'은 새 배정 — 이전 돌림판·티켓 정보와 섞이지 않게
   const sel = document.getElementById('dMember');
   sel.innerHTML = '<option value="">-- 멤버 선택 --</option>';
   pool().forEach(m => sel.innerHTML += `<option value="${m.id}">${m.name} (${m.team})</option>`);
@@ -2006,7 +2033,19 @@ function openDeployModal() {
   document.getElementById('deployCrmStatus').textContent = '';
   document.getElementById('deployModal').classList.add('open');
 }
-function closeDeployModal() { document.getElementById('deployModal').classList.remove('open'); }
+// keep=true 는 저장 직후처럼 '정상 종료' — 진행 중인 배정 정보(티켓·추첨 기록)를 아직 써야 할 때
+function closeDeployModal(keep) {
+  document.getElementById('deployModal').classList.remove('open');
+  if (!keep) clearAssignmentDraft();
+}
+// 진행 중이던 배정 정보를 비운다. 사용자가 창을 그냥 닫거나 처음부터 직접 투입을 열면 호출.
+// ⚠️ 과거엔 비우지 않아 ① 닫은 티켓의 번호가 다음 직접 투입 일정에 붙고
+//    ② 이전 당첨자의 배정 기록 ID를 물려받아 새 배정 기록이 만들어지지 않았다.
+function clearAssignmentDraft() {
+  pendingTicket = null;
+  spinLogPromise = null;
+  lastSpinLogPageId = null;
+}
 // 시작일 변경 시 종료일이 비었거나 시작일보다 앞서면 시작일로 맞춤
 function syncDeployEndDate() {
   const s = document.getElementById('dDate').value;
@@ -2027,8 +2066,12 @@ function saveDeployEvent() {
   if (timeToMinutes(start)>=timeToMinutes(end)) { showToast('종료 시간은 시작 시간보다 늦어야 합니다'); return; }
 
   // 기간(여러 날)이면 그 기간 중 '가능한 평일'마다 배포 이벤트 생성. 하루면 그 하루만.
+  // 날짜 목록은 서버 판정(availCtx)이 같은 기간이면 그것을 쓴다 — "판단은 서버" 원칙.
+  // 서버 결과가 없을 때만 이 PC 기준으로 계산한다.
+  const ctxMember = (availCtx && sameRange(availCtx.range, date, endDate, start, end))
+    ? availCtx.members.find(m => m.id === memberId) : null;
   let days = (endDate > date)
-    ? getAvailableDates(memberId, date, endDate, start, end)
+    ? (ctxMember ? ctxMember.availableDates.slice() : getAvailableDates(memberId, date, endDate, start, end))
     : [date];
   if (days.length === 0) days = [date];  // 안전장치: 가능한 날이 없어도 시작일엔 등록
 
@@ -2044,20 +2087,29 @@ function saveDeployEvent() {
   saveData();
   selectedDay = new Date(date+'T00:00:00');
   currentWeekStart = getMonday(selectedDay);
-  closeDeployModal(); render();
+  closeDeployModal(true); render();   // 아래에서 티켓·배정 기록을 아직 쓴다
 
   const memberName = ALL().find(x=>x.id===memberId)?.name;
   const rangeLabel = days.length > 1 ? `${days[0]} ~ ${days[days.length-1]} (${days.length}일)` : days[0];
   showToast(`${memberName} 배포지원 일정이 투입되었습니다 🚀 (${rangeLabel})`);
 
   // Notion 저장 (날짜별 각각 비동기)
-  created.forEach(ev => {
+  // ⚠️ 첫 저장이 끝나 pageId를 받기 전에 배정 기록 ID를 덧붙여 다시 저장하면, pageId가 없어
+  //    Notion에 같은 일정이 하나 더 생긴다. 그래서 첫 일정의 저장 완료를 기다렸다가 다시 저장한다.
+  const firstSaved = Promise.all(created.map(ev =>
     saveEventToNotion(ev).then(saved => {
       if (saved.pageId) {
         const idx = events.findIndex(x => x.id === ev.id);
         if (idx !== -1) { events[idx].pageId = saved.pageId; saveDataLocal(); }
       }
-    });
+    })
+  ));
+  const resaveFirstWithSpin = spinId => firstSaved.then(() => {
+    const i = events.findIndex(x => x.id === created[0].id);
+    if (i !== -1) {
+      events[i].spinLogPageId = spinId; saveDataLocal();
+      saveEventToNotion(events[i]);   // 연결고리를 Notion에도 반영 → 다른 PC에서도 취소 가능
+    }
   });
 
   // 모든 배정을 공유 스핀 이력 DB에 반드시 기록 (룰렛/직접투입 공통)
@@ -2072,15 +2124,7 @@ function saveDeployEvent() {
   if (usedSpinPromise) {
     // 룰렛 경로: add-spinlog 응답이 늦게 오면 첫 이벤트에 소급 반영 (배포 취소 시 우선순위 복구용)
     if (!created[0].spinLogPageId) {
-      usedSpinPromise.then(id => {
-        if (id) {
-          const i = events.findIndex(x => x.id === created[0].id);
-          if (i !== -1) {
-            events[i].spinLogPageId = id; saveDataLocal();
-            saveEventToNotion(events[i]);   // 연결고리를 Notion에도 반영 → 다른 PC에서도 취소 가능
-          }
-        }
-      });
+      usedSpinPromise.then(id => { if (id) resaveFirstWithSpin(id); });
     }
   } else if (!usedSpinPageId && WORKER_URL) {
     // 직접 투입(룰렛 미사용): 스핀 이력이 없으므로 여기서 생성 → 공유 DB에 배정 기록 + 우선순위 반영
@@ -2094,11 +2138,7 @@ function saveDeployEvent() {
     .then(r => r.json())
     .then(d => {
       if (d.ok && d.pageId) {
-        const i = events.findIndex(x => x.id === created[0].id);
-        if (i !== -1) {
-          events[i].spinLogPageId = d.pageId; saveDataLocal();
-          saveEventToNotion(events[i]);   // 연결고리를 Notion에도 반영
-        }
+        resaveFirstWithSpin(d.pageId);
         loadRrOrderFromNotion();
       }
     })
@@ -2446,7 +2486,7 @@ function renderCrmTickets() {
       <div class="ct-actions">
         ${a
           ? `<span class="ct-meta">${esc(a.from)} ~ ${esc(a.to)} (${a.days}일)</span>`
-          : `<button class="ct-btn primary" onclick="assignFromTicket('${esc(t.ticketNo)}')">이 티켓으로 배정</button>`}
+          : `<button class="ct-btn primary" onclick="assignFromTicket(${jsArg(t.ticketNo)})">이 티켓으로 배정</button>`}
       </div>
     </div>`;
   }).join('');
@@ -2955,13 +2995,13 @@ function refreshRoulette() {
     if (_assigned.length > 0 && wheelSlices.length > 0) {
       noticeEl.style.display = 'block';
       noticeEl.innerHTML =
-        `<span class="ra-title">ℹ️ 이 기간엔 이미 <b>${_assigned.join(', ')}</b> 님이 배정돼 있습니다</span>` +
+        `<span class="ra-title">ℹ️ 이 기간엔 이미 <b>${_assigned.map(escHtml).join(', ')}</b> 님이 배정돼 있습니다</span>` +
         `<span class="ra-sub">추가로 투입하려면 그대로 돌리시고, 교체하려면 📋 스핀 이력에서 '배정 취소' 후 돌려주세요</span>`;
     } else if (_assigned.length > 0) {
       // 배정자는 있는데 가용 인원이 0명 → 돌릴 대상이 없음
       noticeEl.style.display = 'block';
       noticeEl.innerHTML =
-        `<span class="ra-title">ℹ️ 이 기간엔 이미 <b>${_assigned.join(', ')}</b> 님이 배정돼 있고, 추가로 가능한 인원이 없습니다</span>` +
+        `<span class="ra-title">ℹ️ 이 기간엔 이미 <b>${_assigned.map(escHtml).join(', ')}</b> 님이 배정돼 있고, 추가로 가능한 인원이 없습니다</span>` +
         `<span class="ra-sub">기간·시간을 바꾸거나 📋 스핀 이력에서 '배정 취소' 후 다시 시도해 주세요</span>`;
     } else {
       noticeEl.style.display = 'none';
@@ -2973,8 +3013,9 @@ function refreshRoulette() {
   if (wheelSlices.length > 0) drawWheelAt(wheelRot);
 }
 
-function closeRoulette() {
+function closeRoulette(keep) {
   document.getElementById('rouletteModal').classList.remove('open');
+  if (!keep) pendingTicket = null;   // 사용자가 닫으면 '이 티켓으로 배정'은 취소된 것
   // currentWinner는 닫아도 유지 — pendingWinner(localStorage)가 재오픈 시 복원
 }
 
@@ -3324,10 +3365,11 @@ function renderHistory() {
     const nm = h.name || '';
     const cancelled = nm.startsWith('[취소]');
     const isReset   = nm.startsWith('[초기화]');
-    const clean = nm.replace(/^\[(취소|초기화)\]\s*/, '').replace(/'/g, "\\'");
+    const rawName = nm.replace(/^\[(취소|초기화)\]\s*/, '');
+    const clean = escHtml(rawName);                              // 화면 표시용 (이스케이프)
     const rangeM = (h.spunAt || '').match(/기간 (\S+)/);          // 스핀일에 저장된 기간 추출
-    const dateCell = rangeM ? rangeM[1] : (h.targetDate || '');
-    const spunCell = (h.spunAt || '').replace(/\s*·?\s*기간 \S+/, '');
+    const dateCell = escHtml(rangeM ? rangeM[1] : (h.targetDate || ''));
+    const spunCell = escHtml((h.spunAt || '').replace(/\s*·?\s*기간 \S+/, ''));
     let nameCell, actions = '';
     if (cancelled) {
       nameCell = `<span style="color:#aaa;text-decoration:line-through;">${clean}</span> <span style="font-size:10px;color:#c62828;">취소됨</span>`;
@@ -3344,8 +3386,8 @@ function renderHistory() {
                title="추첨 기록만 있고 배포 일정이 없습니다. 배정 모달에서 저장하지 않았을 수 있습니다.">추첨만 됨</span>`
           : '';
       nameCell = `${clean}${badge}`;
-      actions = `<button onclick="sendHistoryMailById('${h.id}')" title="담당자에게 배정 메일 작성" style="${mailSt}">✉️</button>`
-              + `<button onclick="cancelAssignment('${h.id}','${clean}')" title="배정 취소 — 이력은 남기고 우선순위 복구" style="${cancelSt}">🚫 배정 취소</button>`;
+      actions = `<button onclick="sendHistoryMailById(${jsArg(h.id)})" title="담당자에게 배정 메일 작성" style="${mailSt}">✉️</button>`
+              + `<button onclick="cancelAssignment(${jsArg(h.id)},${jsArg(rawName)})" title="배정 취소 — 이력은 남기고 우선순위 복구" style="${cancelSt}">🚫 배정 취소</button>`;
     }
     return `<tr>
       <td style="font-size:11px;">${spunCell}</td>
@@ -3364,14 +3406,52 @@ function sendHistoryMailById(id) {
   openMailtoLink(name, rangeM ? rangeM[1] : (h.targetDate || ''), '09:00', '18:00', '배포지원', '');
 }
 
+// 한 번의 배정(스핀 기록 1건)에 속한 배포 일정 전체를 찾는다.
+// 여러 날 배정은 날짜마다 일정이 1건씩 생기지만, 기록 ID는 첫날 일정에만 붙어 있다.
+// → 첫날 일정 + 같은 멤버·같은 제목·같은 티켓이면서 그 배정 기간 안에 있는 일정을 함께 묶는다.
+function linkedDeployEvents(spinId) {
+  const isMine = e => e.type === 'deploy' && !e.fromOutlook;
+  const first = events.find(e => isMine(e) && e.spinLogPageId === spinId);
+  const log = (notionSpinLog || []).find(l => l.id === spinId);
+  let from = null, to = null;
+  const m = log && (String(log.confirmedRange || '').match(/^(\d{4}-\d{2}-\d{2})(?:~(\d{4}-\d{2}-\d{2}))?$/)
+                 || String(log.spunAt || '').match(/기간\s+(\d{4}-\d{2}-\d{2})\s*~\s*(\d{4}-\d{2}-\d{2})/));
+  if (m) { from = m[1]; to = m[2] || m[1]; }
+  if (!first && !from) return [];
+  const memberId = first ? first.memberId : (log && log.memberId);
+  if (!memberId) return first ? [first] : [];
+  const sameJob = e => !first || (e.title === first.title && (e.ticketNo || null) === (first.ticketNo || null));
+  if (from) {
+    return events.filter(e => isMine(e) && e.memberId === memberId &&
+      (e === first || (e.date >= from && e.date <= to && sameJob(e))));
+  }
+  // 이력(기간)을 아직 못 불러온 경우(달력에서 바로 지울 때 등):
+  // 첫날 이후 같은 멤버·같은 제목·같은 티켓 일정을 날짜순으로 이어 붙이되,
+  // 자기 기록 ID를 가진 일정(= 다음 배정의 첫날)을 만나면 멈춘다. 최대 45일.
+  const limit = new Date(first.date + 'T00:00:00Z'); limit.setUTCDate(limit.getUTCDate() + 45);
+  const limitStr = limit.toISOString().slice(0, 10);
+  const later = events.filter(e => isMine(e) && e !== first && e.memberId === memberId &&
+      e.date > first.date && e.date <= limitStr && sameJob(e))
+    .sort((a, b) => a.date < b.date ? -1 : 1);
+  const out = [first];
+  for (const e of later) {
+    if (e.spinLogPageId && e.spinLogPageId !== spinId) break;
+    out.push(e);
+  }
+  return out;
+}
+
 // 배정 취소: 스핀 이력은 [취소]로 남기고 우선순위 복구 (+ 연결된 배포 일정 제거)
 async function cancelAssignment(id, name) {
   if (!confirm(`${name}님의 이 배정을 취소할까요?\n· 스핀 이력엔 [취소]로 남습니다\n· 라운드로빈 우선순위가 복구됩니다`)) return;
-  const ev = events.find(e => e.type === 'deploy' && e.spinLogPageId === id);
-  if (ev) {                                   // 연결된 배포 일정이 있으면 함께 제거
-    events = events.filter(x => x.id !== ev.id);
+  // ⚠️ 과거엔 첫날 일정만 지워, 남은 날 때문에 그 사람이 계속 '불가'로 보이고
+  //    티켓도 '배정됨'으로 남았다. 이제 배정 기간의 일정을 모두 지운다.
+  const linked = linkedDeployEvents(id);
+  if (linked.length) {
+    const ids = new Set(linked.map(e => e.id));
+    events = events.filter(x => !ids.has(x.id));
     saveData();
-    if (ev.pageId) deleteEventFromNotion(ev.pageId);
+    linked.forEach(e => { if (e.pageId) deleteEventFromNotion(e.pageId); });
   }
   if (WORKER_URL) {
     await fetch(WORKER_URL, {
@@ -3479,7 +3559,7 @@ async function loadStats() {
   const to   = document.getElementById('statTo')?.value   || '';
   let s;
   try { s = await workerPost('get-stats', { from: from || undefined, to: to || undefined }); }
-  catch (e) { box.innerHTML = `<p class="rr-info">통계를 불러오지 못했습니다 — ${String(e.message || e)}</p>`; return; }
+  catch (e) { box.innerHTML = `<p class="rr-info">통계를 불러오지 못했습니다 — ${escHtml(e.message || e)}</p>`; return; }
   if (!s || !s.ok) { box.innerHTML = '<p class="rr-info">통계를 불러오지 못했습니다</p>'; return; }
 
   const esc = x => String(x).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -3505,6 +3585,8 @@ async function loadStats() {
       총 <b>${s.total}회</b> 배정 · 1인 평균 <b>${s.fairness.average}회</b> ·
       최다 ${s.fairness.max}회 / 최소 ${s.fairness.min}회
       ${s.cancelledOrReset ? ` · 취소·초기화 ${s.cancelledOrReset}건 제외` : ''}
+      ${s.unconfirmed ? ` · 추첨만 되고 일정 미등록 ${s.unconfirmed}건 제외` : ''}
+      ${s.outsideRoster ? ` · 현재 후보 밖 인원 ${s.outsideRoster}건 제외` : ''}
     </div>
     ${never.length ? `<div class="rr-unavail-reasons" style="margin-bottom:8px;">
       <div class="ur-title">⚠️ 한 번도 배정되지 않은 인원</div>
@@ -3568,7 +3650,7 @@ function assignFromWheel() {
   // 돌림판에서 설정한 배포 시간 가져오기
   const depStart = document.getElementById('rDepStart')?.value || '09:00';
   const depEnd   = document.getElementById('rDepEnd')?.value   || '18:00';
-  closeRoulette();
+  closeRoulette(true);   // 투입 창으로 이어지므로 티켓 정보는 유지
   populateMemberSelect('dMember', confirmed.id);
   populateTimeSelect('dStart', depStart);
   populateTimeSelect('dEnd',   depEnd);
@@ -3841,7 +3923,7 @@ async function openGuideModal() {
       ? marked.parse(md)
       : '<pre style="white-space:pre-wrap">' + md + '</pre>';
   } catch(e) {
-    body.innerHTML = `<p style="color:#e53935;padding:20px;">가이드를 불러오지 못했습니다: ${e.message}</p>`;
+    body.innerHTML = `<p style="color:#e53935;padding:20px;">가이드를 불러오지 못했습니다: ${escHtml(e.message)}</p>`;
   }
 }
 function closeGuideModal() {

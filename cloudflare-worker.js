@@ -766,8 +766,11 @@ async function buildAvailability(env, { startDate, endDate, startTime, endTime }
 
   const failedIds = new Set(outlook.failedMemberIds || []);
   const members = roster.map(m => {
-    const availDays = days.filter(d => isMemberAvailableOn(events, m.id, d, sT, eT));
-    const available = days.length > 0 && availDays.length === days.length;
+    // 아웃룩 조회에 실패한 멤버는 일정이 0건으로 보여 '가능'으로 오판된다.
+    // 바쁜 사람이 뽑히는 것을 막기 위해, 확인되기 전까지 후보에서 제외한다.
+    const stale = failedIds.has(m.id);
+    const availDays = stale ? [] : days.filter(d => isMemberAvailableOn(events, m.id, d, sT, eT));
+    const available = !stale && days.length > 0 && availDays.length === days.length;
     const urgent = available && days.some(d => events.some(e =>
       e.memberId === m.id && e.date === d &&
       (e.isAllDay || eventsOverlap(sT, eT, e.startTime || '09:00', e.endTime || '18:00')) &&
@@ -775,9 +778,10 @@ async function buildAvailability(env, { startDate, endDate, startTime, endTime }
     return {
       ...m, available, urgent,
       availableDates: availDays,
-      reasons: available ? [] : buildUnavailReasons(events, m.id, days, sT, eT),
-      // 아웃룩 조회에 실패한 멤버는 판정을 신뢰할 수 없음을 명시
-      stale: failedIds.has(m.id),
+      reasons: available ? []
+        : stale ? [{ dates: '', text: '아웃룩 일정 조회 실패 — 확인 전까지 후보에서 제외' }]
+        : buildUnavailReasons(events, m.id, days, sT, eT),
+      stale,
     };
   });
 
@@ -981,14 +985,25 @@ async function buildStats(env, { from, to } = {}) {
       name: getNotionText(pr,'이름'),
       targetDate: pr['날짜']?.date?.start || '',
       memberId: pr['멤버ID']?.number ?? null,
+      spunAt: getNotionRichText(pr,'스핀일'),
       createdTime: p.created_time,
     };
   });
 
+  // 추첨만 하고 일정 등록을 안 한 건(confirmed:false)은 '배정'이 아니므로 집계에서 뺀다.
+  // (배포 일정 대조에 실패하면 confirmed 가 비어 있고, 그때는 보수적으로 집계에 포함)
+  await annotateSpinLogs(env, logs);
+
   const roster = buildRoster(env, (await readSettings(env)).includeExtra);
+  const rosterIds = new Set(roster.map(m => m.id));
   const inRange = l => (!from || l.createdTime.slice(0,10) >= from)
                     && (!to   || l.createdTime.slice(0,10) <= to);
-  const valid = logs.filter(l => l.memberId != null && inRange(l));
+  const assignedLogs = logs.filter(l => l.memberId != null && inRange(l));
+  const unconfirmed  = assignedLogs.filter(l => l.confirmed === false).length;
+  const confirmedLogs = assignedLogs.filter(l => l.confirmed !== false);
+  // 비율·평균은 현재 후보 명단 기준 (명단 밖 인원 기록이 섞이면 비율 합이 100%가 안 됨)
+  const outsideRoster = confirmedLogs.filter(l => !rosterIds.has(l.memberId)).length;
+  const valid = confirmedLogs.filter(l => rosterIds.has(l.memberId));
 
   const byId = {};
   valid.forEach(l => {
@@ -1018,6 +1033,8 @@ async function buildStats(env, { from, to } = {}) {
     range: { from: from || null, to: to || null },
     total,
     cancelledOrReset: logs.filter(l => l.memberId == null && inRange(l)).length,
+    unconfirmed,      // 추첨만 되고 일정 미등록 → 제외
+    outsideRoster,    // 현재 후보 명단 밖 인원 → 제외
     members,
     fairness: {
       average: Math.round(avg * 10) / 10,

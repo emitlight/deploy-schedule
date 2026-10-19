@@ -46,8 +46,8 @@
 
 ```
 배포지원 일정관리/
-├── index.html              ← 대시보드 SPA (GitHub Pages, 약 3,250줄)
-├── cloudflare-worker.js    ← Worker — 가용 판정·외부 연동 (약 1,000줄)
+├── index.html              ← 대시보드 SPA (GitHub Pages, 약 3,900줄 · 디자인 v2 스타일 블록 #design-v2)
+├── cloudflare-worker.js    ← Worker — 가용 판정·외부 연동 (약 1,450줄)
 ├── wrangler.toml           ← Cron·관측성 설정
 ├── .github/workflows/      ← CI (Worker 자동 배포 + 문법·상수 검사)
 ├── 사용가이드.md            ← ⭐ 단일 기준 문서. 대시보드가 GitHub raw에서 실시간 fetch
@@ -55,6 +55,9 @@
 ├── 시스템정리.md            ← 개발자용 기술 개요
 ├── 테스트시나리오_배포지원시스템.md
 ├── 고도화_계획서.md         ← 2026-10-13 개편 배경·계획
+├── sync/                   ← CRM 배포지원요청 티켓 동기화 스크립트 (사내 서버에서 실행 → ingest-crm-tickets)
+├── 테스트/                  ← 회귀 테스트 (node 테스트/*.mjs — 코드 수정 후 반드시 실행)
+├── 보고서/                  ← 고도화 결과 보고 PPT · 기능정리_및_검증결과.md
 ├── _archive/               ← 미사용 파일 보관 (운영 무관)
 └── CLAUDE.md               ← 이 파일
 ```
@@ -83,10 +86,8 @@ Cloudflare Worker  ← 유일한 판단 주체
 **후보 명단은 서버 공유 설정을 따른다.** 대시보드 헤더의 `➕ 추가 인원` 버튼을 누르면
 Worker의 KV(`SETTINGS` / 키 `roster-config`)에 저장되어 **모든 PC에 즉시 반영**된다.
 
-- KV 바인딩이 없으면: 토글은 **그 PC에만** 적용되고 화면이 그렇게 안내한다.
-  기본값은 환경변수 `INCLUDE_EXTRA`(0/1).
-- KV 설정: `npx wrangler kv namespace create SETTINGS` → 출력된 id를 `wrangler.toml`의
-  `[[kv_namespaces]]` 블록에 넣고 주석 해제 → 재배포.
+- KV(`SETTINGS`)는 2026-10-14부터 `wrangler.toml`에 연결돼 있다. 키: `roster-config`, `crm-tickets`.
+- KV 바인딩이 빠지면 토글은 **그 PC에만** 적용되고 화면이 그렇게 안내한다. 기본값은 환경변수 `INCLUDE_EXTRA`(0/1).
 
 과거엔 이 토글이 PC별 localStorage라 운영자마다 후보군(8명/11명)이 달랐다.
 
@@ -138,6 +139,8 @@ Worker의 KV(`SETTINGS` / 키 `roster-config`)에 저장되어 **모든 PC에 �
 | `get-availability` | ⭐ 가용 판정 (가용/불가·사유·중복배정) — 화면의 주 경로 |
 | `get-roster` | 멤버 명단 + 공유 설정 (가벼움, 외부 API 호출 없음) |
 | `set-roster-config` | 추가 인원 포함/제외 설정 저장 (KV, 전 PC 공유) |
+| `get-crm-tickets` | CRM 배포지원요청 티켓 목록 (KV `crm-tickets`) |
+| `ingest-crm-tickets` | 사내 동기화 스크립트가 티켓을 밀어 넣음 (X-Auth=`INGEST_TOKEN` 전용) |
 | `get-stats` | 멤버별 배정 통계 (공정성 증명) |
 | `sync-outlook` | 아웃룩 조회 (Notion 저장 안 함) |
 | `run-sync` | Cron과 동일한 동기화 수동 실행 → 실제 집계 반환 |
@@ -158,7 +161,8 @@ GRAPH_CLIENT_ID / GRAPH_TENANT_ID / GRAPH_CLIENT_SECRET(⭐)
 MEMBER_EMAILS  {"이하영":"hayoung.lee@softcamp.co.kr", ...}
 MEMBER_IDS     {"이하영":2, "이송민":1, ...}
 INCLUDE_EXTRA  추가 후보 3명 포함 여부의 기본값 (KV 미설정 시에만 사용)
-SETTINGS       KV 바인딩 — 공유 설정 저장소 (선택. 없으면 토글이 PC 로컬로 동작)
+SETTINGS       KV 바인딩 — 공유 설정·CRM 티켓 저장소 (wrangler.toml에 연결됨)
+INGEST_TOKEN   CRM 티켓 동기화 스크립트 전용 토큰 (ingest-crm-tickets 만 허용)
 NOTION_SECRET(⭐) / SCHEDULES_DB_ID / SPINLOG_DB_ID
 VTIGER_URL / VTIGER_USERNAME / VTIGER_ACCESS_KEY(⭐) / VTIGER_MEMBER_IDS
 ```
@@ -187,7 +191,10 @@ CI 사전 설정: GitHub Secrets에 `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_
 | SPINLOG_DB | `0674e90b37fe4a6e8784c99df1c6006f` | 배정 이력 |
 
 **SCHEDULES_DB 속성**: 제목 · 멤버ID · 날짜 · 시작시간 · 종료시간 · 타입 · 노트 ·
-아웃룩여부 · 하루종일 · 아웃룩ID · **배포분류**(수동 분류) · **스핀로그ID**(배정↔이력 연결)
+아웃룩여부 · 하루종일 · 아웃룩ID · **배포분류**(수동 분류) · **스핀로그ID**(배정↔이력 연결) · **티켓번호**(CRM 티켓 연결)
+
+> 여러 날 배정은 날짜마다 일정이 1건씩 생기고, **스핀로그ID는 첫날에만** 붙는다.
+> 배정 취소·하루 삭제는 `linkedDeployEvents()`로 같은 배정의 나머지 날을 함께 찾는다.
 
 **SPINLOG_DB 속성**: 이름 · 날짜 · 스핀일 · 멤버ID
 → `[취소]`·`[초기화]` 로그는 **멤버ID를 비워** 우선순위·통계 계산에서 자동 제외된다.
@@ -226,4 +233,6 @@ CI 사전 설정: GitHub Secrets에 `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_
 | vtiger 연동 | IT 관리자에게 Cloudflare IP 화이트리스트 요청 필요 |
 | 아웃룩 일정 자동 생성 | EWS `ApplicationImpersonation` 서비스 계정 필요 |
 | 아웃룩ID 뒤 16자 사용 | 충돌 확률 낮으나 존재. 형식 변경 시 기존 사본·수동분류 소실되므로 유지 중 |
-| `index.html` 3,250줄 단일 파일 | 모듈 분리 미완. 가용판정 → 통신 → 상태 순으로 분리 권장 |
+| `index.html` 약 3,900줄 단일 파일 | 모듈 분리 미완. 가용판정 → 통신 → 상태 순으로 분리 권장 |
+| 외부 문자열 표시 | 화면에 넣는 외부 문자열은 `escHtml()`, onclick 인자는 `jsArg()` 사용 필수 — **보안 검토 필요** (2026-10-19 XSS 수정) |
+| 사용가이드 렌더링 | `marked.parse` 결과를 그대로 표시. 공개 저장소의 md라 PR·계정 탈취 시 위험 — 정화(sanitize) 미적용 |

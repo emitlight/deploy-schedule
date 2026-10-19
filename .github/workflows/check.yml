@@ -43,12 +43,25 @@ jobs:
             const fs = require('fs');
             const w = fs.readFileSync('cloudflare-worker.js', 'utf8');
             const h = fs.readFileSync('index.html', 'utf8');
-            const re = /const OUT_KEYWORDS\s*=\s*(\[[^\]]*\])/;
-            const a = (w.match(re) || [])[1], b = (h.match(re) || [])[1];
-            if (a && b && a.replace(/\s/g,'') !== b.replace(/\s/g,'')) {
-              console.error('❌ OUT_KEYWORDS 가 서버와 화면에서 다릅니다. 두 곳을 맞추세요.');
-              console.error('   worker:', a); console.error('   index :', b);
-              process.exit(1);
+            // 서버의 '판정용' 목록과 화면 폴백 목록을 비교한다.
+            // (서버의 OUT_KEYWORDS 는 색상 분류용이라 판정과 무관 — 판정용은 AVAIL_OUT_KEYWORDS)
+            const get = (src, name) => {
+              const m = src.match(new RegExp('const ' + name + '\\s*=\\s*(\\[[^\\]]*\\])'));
+              return m ? m[1].replace(/\s/g, '') : null;
+            };
+            const pairs = [
+              ['AVAIL_OUT_KEYWORDS', 'OUT_KEYWORDS'],         // 부재 키워드
+              ['AVAILABLE_KEYWORDS', 'AVAILABLE_KEYWORDS'],   // 가능 키워드
+            ];
+            let bad = false;
+            for (const [wn, hn] of pairs) {
+              const a = get(w, wn), b = get(h, hn);
+              if (!a || !b) { console.error('❌ 상수를 찾지 못함:', !a ? 'worker ' + wn : 'index ' + hn); bad = true; continue; }
+              if (a !== b) {
+                console.error('❌ 서버 ' + wn + ' 와 화면 ' + hn + ' 가 다릅니다. 두 곳을 맞추세요.');
+                console.error('   worker:', a); console.error('   index :', b); bad = true;
+              }
             }
-            console.log('✅ 공통 상수 일치');
+            if (bad) process.exit(1);
+            console.log('✅ 판정 상수 일치 (부재·가능 키워드)');
           "
