@@ -38,30 +38,13 @@ jobs:
       - name: 판정 규칙 중복 구현 감지
         # 가용 판정은 서버(cloudflare-worker.js)가 단일 기준이어야 한다.
         # 과거 두 파일에 같은 규칙이 따로 있어 목록이 서로 달라진 적이 있다.
+        # (정규식의 역슬래시가 셸 따옴표에서 깨지지 않도록 별도 스크립트로 분리)
+        run: node .github/scripts/check-constants.cjs
+
+      - name: 회귀 테스트 (테스트/*.mjs)
+        # 의존성 없이 Node 만으로 돈다. 하나라도 실패하면 막는다.
         run: |
-          node -e "
-            const fs = require('fs');
-            const w = fs.readFileSync('cloudflare-worker.js', 'utf8');
-            const h = fs.readFileSync('index.html', 'utf8');
-            // 서버의 '판정용' 목록과 화면 폴백 목록을 비교한다.
-            // (서버의 OUT_KEYWORDS 는 색상 분류용이라 판정과 무관 — 판정용은 AVAIL_OUT_KEYWORDS)
-            const get = (src, name) => {
-              const m = src.match(new RegExp('const ' + name + '\\s*=\\s*(\\[[^\\]]*\\])'));
-              return m ? m[1].replace(/\s/g, '') : null;
-            };
-            const pairs = [
-              ['AVAIL_OUT_KEYWORDS', 'OUT_KEYWORDS'],         // 부재 키워드
-              ['AVAILABLE_KEYWORDS', 'AVAILABLE_KEYWORDS'],   // 가능 키워드
-            ];
-            let bad = false;
-            for (const [wn, hn] of pairs) {
-              const a = get(w, wn), b = get(h, hn);
-              if (!a || !b) { console.error('❌ 상수를 찾지 못함:', !a ? 'worker ' + wn : 'index ' + hn); bad = true; continue; }
-              if (a !== b) {
-                console.error('❌ 서버 ' + wn + ' 와 화면 ' + hn + ' 가 다릅니다. 두 곳을 맞추세요.');
-                console.error('   worker:', a); console.error('   index :', b); bad = true;
-              }
-            }
-            if (bad) process.exit(1);
-            console.log('✅ 판정 상수 일치 (부재·가능 키워드)');
-          "
+          for t in 테스트/*.mjs; do
+            echo "── $t"
+            node "$t" || exit 1
+          done
