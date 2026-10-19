@@ -787,6 +787,228 @@
   .guide-modal-body ul, .guide-modal-body ol { padding-left:20px; }
   .guide-modal-body hr { border:none; border-top:1px solid #e8eaf6; margin:16px 0; }
 </style>
+<!-- 서체: IBM Plex Sans KR (SIL OFL 1.1 — 상업 사용 가능, 라이선스 확인 필요). 로드 실패 시 맑은 고딕으로 대체 -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style id="design-v2">
+  /* ════════════════════════════════════════════════════════════════════
+     디자인 v2 (2026-10-19) — 위 기본 스타일을 덮어쓴다.
+     이 블록만 지우면 이전 화면으로 돌아간다. 기능(id·onclick)은 건드리지 않음.
+     원칙: 화면은 조용하게(잉크·가는 선), 눈에 띄는 건 돌림판 다이얼 하나.
+     ════════════════════════════════════════════════════════════════════ */
+  :root {
+    --paper:#F5F6F8; --surface:#FFFFFF; --ink:#1C2433; --graphite:#5E6A7D;
+    --mute:#8B95A7; --rule:#DFE3EA; --rule-soft:#ECEFF4;
+    --cobalt:#2B3A8C; --cobalt-tint:#EEF0F8;
+    --verdigris:#0E7C66; --verdigris-tint:#E6F3EF;
+    --stop:#B42318; --stop-tint:#FDEEEC; --caution:#9A5B0B; --caution-tint:#FDF4E3;
+    --radius:8px;
+  }
+  body {
+    font-family: 'IBM Plex Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif;
+    background: var(--paper); color: var(--ink);
+    font-feature-settings: 'tnum' 1;   /* 숫자 폭 고정 — 시간·건수가 흔들리지 않게 */
+    -webkit-font-smoothing: antialiased;
+  }
+  :focus-visible { outline: 2px solid var(--cobalt); outline-offset: 2px; }
+
+  /* ── 헤더: 그라데이션 대신 잉크 단색, 주 동작 1개만 채운 버튼 ── */
+  .header {
+    background: var(--ink); box-shadow: none; padding: 14px 24px;
+    border-bottom: 1px solid #0F1522;
+  }
+  .header-left h1 { font-size: 17px; font-weight: 600; letter-spacing: -0.2px; }
+  .header-left p  { font-size: 12px; opacity: 1; color: #A9B2C3; margin-top: 3px; }
+  .header-right   { gap: 6px; }
+  .btn { font-family: inherit; border-radius: 6px; font-weight: 500; }
+  .header .btn-white {
+    background: transparent; color: #E4E8F0; border: 1px solid rgba(255,255,255,0.18);
+  }
+  .header .btn-white:hover { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.32); }
+  .header .btn-assign {
+    background: var(--verdigris); color: #fff; font-weight: 600; border: 1px solid var(--verdigris);
+  }
+  .header .btn-assign:hover { background: #0B6A57; }
+  .hdr-menu { border-color: var(--rule); border-radius: var(--radius); box-shadow: 0 12px 32px rgba(16,24,40,0.14); }
+  .hdr-menu button { font-family: inherit; color: var(--ink); }
+  .hdr-menu button:hover { background: var(--cobalt-tint); }
+
+  /* ── 주간 이동 + 범례: 한 장의 흰 띠처럼 ── */
+  .week-nav { box-shadow: none; border-bottom: 1px solid var(--rule-soft); padding: 12px 24px; }
+  .week-nav-btn { border-color: var(--rule); color: var(--graphite); background: var(--surface); }
+  .month-label-btn { font-family: inherit; color: var(--ink); font-weight: 600; }
+  .btn-secondary { background: var(--surface); color: var(--ink); border: 1px solid var(--rule); }
+  .btn-secondary:hover { background: var(--paper); }
+  .day-tab { font-family: inherit; border-color: var(--rule); color: var(--graphite); }
+  .day-tab.active { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .day-tab.today { color: var(--stop); border-color: #F0C2BC; }
+  .day-tab.today.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .legend { border-bottom: 1px solid var(--rule); padding: 9px 24px; gap: 18px; }
+  .legend-title { font-size: 12px; font-weight: 600; color: var(--graphite); }
+  .legend-hint { margin-left: auto; font-size: 11px; color: var(--mute); }
+  .legend-item { color: var(--graphite); }
+  .legend-dot { width: 10px; height: 10px; border-radius: 2px; }
+  .dot-meeting { background: #6C7BC4; }
+  .dot-deploy  { background: var(--stop); }
+  .dot-out     { background: #9AA3B2; }
+  .dot-other   { background: #B49A7A; }
+  .dot-free    { background: var(--verdigris-tint); border: 1px solid #9CCFC1; }
+
+  /* ── 요청 대기열(CRM 티켓): 색 띠 카드 대신 가는 선의 행 ── */
+  .crm-tickets { max-width: none; padding: 0 24px; margin-bottom: 16px; }
+  .ct-head { color: var(--ink); font-size: 13px; font-weight: 600; margin-bottom: 10px; }
+  .ct-head .ct-count { background: var(--ink); font-weight: 600; }
+  .ct-head .ct-sync { color: var(--mute); }
+  .ct-list { gap: 12px; }
+  .ct-card {
+    border: 1px solid var(--rule); border-left: 1px solid var(--rule);
+    border-radius: var(--radius); padding: 14px 16px; background: var(--surface);
+    max-width: 520px;
+  }
+  .ct-card.assigned { border-left-color: var(--rule); background: var(--surface); }
+  .ct-card.urgent   { border-color: #F2D3A3; }
+  .ct-no { color: var(--graphite); font-weight: 600; border-bottom-color: var(--rule); }
+  .ct-badge { border-radius: 999px; padding: 1px 8px; font-weight: 600; }
+  .ct-badge.wait { background: var(--caution-tint); color: var(--caution); border-color: #F2D9AE; }
+  .ct-badge.done { background: var(--verdigris-tint); color: var(--verdigris); border-color: #BFE0D6; }
+  .ct-title { color: var(--ink); font-size: 14px; font-weight: 600; margin: 6px 0 8px; }
+  .ct-meta  { color: var(--graphite); }
+  .ct-meta b { color: var(--ink); font-weight: 500; }
+  .ct-btn { font-family: inherit; border-color: var(--rule); color: var(--ink); border-radius: 6px; }
+  .ct-btn.primary { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .ct-btn.primary:hover { background: #2A3446; }
+
+  /* ── 요약: 박스 대신 한 줄 지표 ── */
+  .summary-bar {
+    border-top: none; box-shadow: none; border: 1px solid var(--rule);
+    border-radius: var(--radius); padding: 12px 20px; gap: 28px;
+  }
+  .summary-label {
+    text-transform: none; letter-spacing: 0; font-size: 12px;
+    font-weight: 500; color: var(--graphite);
+  }
+  .summary-value { font-size: 22px; font-weight: 600; color: var(--ink); }
+  .summary-value.red   { color: var(--stop); }
+  .summary-value.green { color: var(--verdigris); }
+  .summary-divider { background: var(--rule-soft); }
+  .free-member-card:hover { background: var(--verdigris-tint); border-color: #BFE0D6; box-shadow: none; }
+  .free-member-card .hint { color: var(--mute); font-size: 10px; }
+
+  /* ── 주간 달력 ── */
+  .grid-container { border: 1px solid var(--rule); box-shadow: none; border-radius: var(--radius); }
+  .grid-header { background: var(--surface); border-bottom: 1px solid var(--rule); }
+  .grid-header-time { color: var(--mute); }
+  .member-col-header { border-left-color: var(--rule-soft); padding: 12px 12px 10px; }
+  .member-name { color: var(--ink); font-weight: 600; font-size: 14px; }
+  .member-team { color: var(--graphite); font-size: 11px; }
+  .member-dept { color: var(--mute); }
+  .allday-row { background: #FAFBFC; border-bottom: 1px solid var(--rule); }
+  .allday-label, .time-label { color: var(--mute); }
+  .allday-label { border-right-color: var(--rule-soft); }
+  .allday-cell { border-left-color: var(--rule-soft); }
+  .time-label { border-right-color: var(--rule-soft); font-weight: 500; }
+  .time-label.half { color: #C3C9D4; }
+  .time-label:not(.half)::after { background: var(--rule); }
+  .timed-slot-row { border-bottom-color: var(--rule-soft); }
+  .timed-slot-row:first-child { border-top-color: var(--rule); }
+  .timed-slot-row:not(.half-hour):not(:first-child) { border-top: 1px solid var(--rule); }
+  .timed-slot-row.half-hour { border-bottom: 1px dashed var(--rule-soft); }
+  .timed-slot-col { border-left-color: var(--rule-soft); }
+  .timed-slot-col:hover, .cell:hover { background: #F2F4FA; }
+
+  /* 일정 블록: 한쪽 색 띠 대신 옅은 바탕 + 같은 계열 외곽선 */
+  .timed-event-block, .event-block, .allday-event {
+    border-left-width: 1px !important; border-radius: 6px; font-weight: 500;
+  }
+  .event-meeting { background: var(--cobalt-tint); color: #2E3B7A; border: 1px solid #CDD3EC; }
+  .event-deploy  { background: var(--stop-tint);   color: #8E1B12; border: 1px solid #F3C4BE; }
+  .event-out     { background: #F0F2F5;            color: #4B5565; border: 1px solid #D9DEE6; }
+  .event-other   { background: #F5F0E9;            color: #6A4E2E; border: 1px solid #E5D8C6; }
+  .event-meeting.from-outlook { border-left-color: #CDD3EC; }
+  .timed-event-block .event-time, .event-time { opacity: 0.75; }
+  .outlook-badge { background: var(--graphite); border-radius: 3px; font-weight: 600; }
+  .free-indicator { background: var(--verdigris-tint); border-color: #9CCFC1; color: var(--verdigris); }
+  .badge-red { background: var(--stop-tint); color: var(--stop); }
+
+  /* ── 모달 공통 ── */
+  .modal-overlay { background: rgba(16,22,34,0.45); }
+  .modal { border-radius: 14px; box-shadow: 0 24px 64px rgba(16,24,40,0.24); }
+  .modal h3 { color: var(--ink); font-weight: 600; }
+  .form-group label { color: var(--graphite); font-weight: 500; }
+  .form-group input, .form-group select, .form-group textarea { border-color: var(--rule); color: var(--ink); }
+  .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+    border-color: var(--cobalt); box-shadow: 0 0 0 3px rgba(43,58,140,0.12);
+  }
+  .btn-primary { background: var(--ink); }
+  .btn-primary:hover { background: #2A3446; }
+  .toast { background: var(--ink); border-radius: var(--radius); }
+
+  /* ── 배정 모달 ── */
+  .roulette-modal { width: 440px !important; }
+  .roulette-tabs { border: 1px solid var(--rule); border-radius: var(--radius); padding: 3px; gap: 3px; background: var(--paper); }
+  .roulette-tab { font-family: inherit; background: transparent; color: var(--graphite); border-radius: 6px; font-weight: 500; }
+  .roulette-tab:first-child { border-right: none; }
+  .roulette-tab.active { background: var(--surface); color: var(--ink); font-weight: 600;
+    box-shadow: 0 1px 2px rgba(16,24,40,0.12); }
+  .dep-time-row { background: var(--paper); border-color: var(--rule); }
+  .dep-time-label { color: var(--graphite); font-weight: 600; }
+  .dep-time-row select, .dep-time-row input { border-color: var(--rule) !important; color: var(--ink) !important; font-family: inherit; }
+  .rr-info { color: var(--graphite); }
+  .rr-queue-label { text-transform: none; letter-spacing: 0; font-size: 12px; font-weight: 600; color: var(--graphite); }
+  .rr-item { font-weight: 500; border-width: 1px; }
+  .rr-item.avail   { background: var(--verdigris-tint); color: #0A5C4C; border-color: #BFE0D6; }
+  .rr-item.unavail { background: var(--surface); color: #A3ABBA; border-color: var(--rule-soft); }
+  .rr-unavail-reasons { background: var(--caution-tint); border-color: #F2D9AE; color: #6B4508; border-radius: var(--radius); }
+  .rr-unavail-reasons .ur-title { color: var(--caution); font-weight: 600; }
+  .rr-unavail-reasons .ur-name  { color: var(--ink); font-weight: 600; }
+  .rr-assigned-notice { background: var(--cobalt-tint); border-color: #CDD3EC; border-radius: var(--radius); }
+  .rr-rule-note { background: transparent; border: none; color: var(--graphite); padding: 2px 0 6px; }
+
+  /* 다이얼: 금고 다이얼처럼. 포인터는 상단 노치 */
+  .wheel-wrap { margin: 10px 0 14px; position: relative; }
+  .wheel-pointer {
+    font-size: 0; width: 0; height: 0; margin-bottom: -2px; filter: none;
+    border-left: 9px solid transparent; border-right: 9px solid transparent;
+    border-top: 14px solid var(--verdigris);
+  }
+  #wheelCanvas { box-shadow: 0 10px 30px rgba(16,24,40,0.18); }
+
+  .result-banner.show {
+    background: var(--verdigris-tint); border: 1px solid #9CCFC1; color: #0A5C4C;
+    font-weight: 600; border-radius: var(--radius);
+  }
+  .spin-big-btn { background: var(--ink); box-shadow: none; font-weight: 600; font-family: inherit; }
+  .spin-big-btn:hover:not(:disabled) { background: #2A3446; transform: none; box-shadow: none; }
+  .assign-deploy-btn { background: var(--verdigris); font-family: inherit; font-weight: 600; }
+  .assign-deploy-btn:hover { background: #0B6A57; }
+  .rr-reset-btn { background: var(--surface); border: 1px solid var(--rule); color: var(--graphite); font-family: inherit; }
+  .history-table th { background: var(--paper); text-transform: none; letter-spacing: 0;
+    font-size: 11px; font-weight: 600; color: var(--graphite); border-bottom: 1px solid var(--rule); }
+  .history-table td { border-bottom-color: var(--rule-soft); color: var(--ink); }
+  .history-winner { color: var(--ink); font-weight: 600; }
+  .history-scroll { border-color: var(--rule); }
+  .crm-assign-btn { background: var(--ink); }
+
+  /* 가이드 모달 */
+  .guide-modal-header { color: var(--ink); border-bottom-color: var(--rule); font-weight: 600; }
+  .guide-modal-body { color: #2B3445; }
+  .guide-modal-body h1, .guide-modal-body h2, .guide-modal-body h3 { color: var(--ink); }
+  .guide-modal-body h2 { border-bottom-color: var(--rule); }
+  .guide-modal-body th { background: var(--paper); }
+  .guide-modal-body code { background: var(--paper); color: var(--stop); }
+  .guide-modal-body pre { background: var(--paper); }
+  .guide-modal-body pre code { color: var(--ink); }
+  .guide-modal-body blockquote { border-left-color: var(--rule); background: var(--paper); color: var(--graphite); }
+
+  @media (max-width: 900px) {
+    .crm-tickets { padding: 0 12px; }
+    .summary-bar { gap: 16px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  }
+</style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
 </head>
 <body>
@@ -794,27 +1016,27 @@
 <!-- Header -->
 <div class="header">
   <div class="header-left">
-    <h1><a href="https://emitlight.github.io/deploy-schedule/" style="color:inherit;text-decoration:none;">🚀 본부 멤버 배포지원 투입관리 대시보드</a></h1>
-    <p>Partner / Appliance / Security 365 Platform부 · <span id="memberCount">8</span>명</p>
+    <h1><a href="https://emitlight.github.io/deploy-schedule/" style="color:inherit;text-decoration:none;">배포지원 투입관리</a></h1>
+    <p>Partner / Appliance / Security 365 Platform부 · 후보 <span id="memberCount">8</span>명</p>
   </div>
   <div class="header-right">
-    <button class="btn" onclick="openRoulette()" style="background:#3949ab;color:#fff;font-weight:700;">🎲 배포지원 배정</button>
-    <button class="btn btn-white" onclick="openDeployModal()">🚀 직접 투입</button>
-    <button class="btn btn-white" id="syncBtn" onclick="syncOutlook()" title="아웃룩 동기화 (매일 자동 3회)">☁️ 동기화</button>
+    <button class="btn btn-white" id="syncBtn" onclick="syncOutlook()" title="아웃룩 동기화 (매일 자동 3회)">동기화</button>
     <div class="hdr-dd">
-      <button class="btn btn-white" onclick="toggleHdrMenu(event,'viewMenu')">👁️ 보기 ▾</button>
+      <button class="btn btn-white" onclick="toggleHdrMenu(event,'viewMenu')">보기 ▾</button>
       <div class="hdr-menu" id="viewMenu">
-        <button id="toggleFreeBtn" onclick="toggleFreeSlots()">🟢 빈 시간 보기</button>
+        <button id="toggleFreeBtn" onclick="toggleFreeSlots()">빈 시간 보기</button>
         <button id="extraBtn" onclick="toggleExtra()" title="문병린·문정일·양창호를 후보에 포함/제외">➕ 추가 인원</button>
       </div>
     </div>
     <div class="hdr-dd">
-      <button class="btn btn-white" onclick="toggleHdrMenu(event,'helpMenu')">❓ 도움말 ▾</button>
+      <button class="btn btn-white" onclick="toggleHdrMenu(event,'helpMenu')">도움말 ▾</button>
       <div class="hdr-menu" id="helpMenu">
-        <button onclick="openGuideModal();closeHdrMenus()">📖 사용가이드</button>
-        <button onclick="openTagModal();closeHdrMenus()">🏷️ 태그 안내</button>
+        <button onclick="openGuideModal();closeHdrMenus()">사용가이드</button>
+        <button onclick="openTagModal();closeHdrMenus()">아웃룩 태그 규칙</button>
       </div>
     </div>
+    <button class="btn btn-white" onclick="openDeployModal()">직접 투입</button>
+    <button class="btn btn-assign" onclick="openRoulette()">배포지원 배정</button>
   </div>
 </div>
 
@@ -848,13 +1070,13 @@
 
 <!-- Legend -->
 <div class="legend">
-  <span style="font-size:12px;font-weight:700;color:#555;">범례</span>
+  <span class="legend-title">범례</span>
   <div class="legend-item"><div class="legend-dot dot-meeting"></div>회의/미팅</div>
   <div class="legend-item"><div class="legend-dot dot-deploy"></div>배포지원</div>
   <div class="legend-item"><div class="legend-dot dot-out"></div>외근/휴가</div>
   <div class="legend-item"><div class="legend-dot dot-other"></div>기타</div>
   <div class="legend-item"><div class="legend-dot dot-free"></div>빈 시간</div>
-  <span style="margin-left:auto;font-size:11px;color:#aaa;">빈 셀 클릭 → 일정 추가 · 일정 클릭 → 수정/삭제</span>
+  <span class="legend-hint">빈 칸을 누르면 일정 추가, 일정을 누르면 수정</span>
 </div>
 
 <!-- CRM 배포지원요청 티켓 (사내 동기화로 들어옴) -->
@@ -1010,13 +1232,13 @@
 <!-- Roulette Modal -->
 <div class="modal-overlay" id="rouletteModal">
   <div class="modal roulette-modal">
-    <h3>🎲 배포지원 돌림판</h3>
+    <h3>배포지원 배정</h3>
 
     <!-- 탭 -->
     <div class="roulette-tabs">
-      <button class="roulette-tab active" id="tabWheel" onclick="switchTab('wheel')">🎲 돌림판</button>
-      <button class="roulette-tab" id="tabHistory" onclick="switchTab('history')">📋 스핀 이력</button>
-      <button class="roulette-tab" id="tabStats" onclick="switchTab('stats')">📊 배정 통계</button>
+      <button class="roulette-tab active" id="tabWheel" onclick="switchTab('wheel')">돌림판</button>
+      <button class="roulette-tab" id="tabHistory" onclick="switchTab('history')">스핀 이력</button>
+      <button class="roulette-tab" id="tabStats" onclick="switchTab('stats')">배정 통계</button>
     </div>
 
     <!-- 배정 통계 탭 — 공정성을 수치로 증명 (요구사항 §4-3) -->
@@ -1056,7 +1278,7 @@
       <div class="rr-unavail-reasons" id="rrUnavailReasons"></div>
       <div class="rr-assigned-notice" id="rrAssignedNotice" style="display:none;"></div>
       <div class="rr-rule-note">
-        🎲 배포 가능한 인원 중 <strong>동일한 확률</strong>로 추첨합니다 · 배정 이력은 📋 스핀 이력에 기록됩니다
+        배포 가능한 인원 중 <strong>동일한 확률</strong>로 추첨합니다. 결과는 스핀 이력에 남습니다.
       </div>
       <div class="wheel-wrap">
         <div class="wheel-pointer">▼</div>
@@ -1067,7 +1289,7 @@
         <button onclick="resetPendingWinner()" style="font-size:11px;padding:3px 10px;border:.5px solid #e0e0e0;border-radius:6px;background:transparent;color:#888;cursor:pointer;">✕ 당첨자 초기화 (다시 추첨)</button>
       </div>
       <button class="assign-deploy-btn" id="assignDeployBtn" onclick="assignFromWheel()">
-        🚀 이 멤버로 배포지원 일정 투입하기
+        이 멤버로 배포지원 일정 등록
       </button>
 
       <!-- vtiger CRM 연동 -->
@@ -2043,7 +2265,7 @@ function goToday() {
 }
 function toggleFreeSlots() {
   showFree = !showFree;
-  document.getElementById('toggleFreeBtn').textContent = showFree ? '🟢 빈 시간 숨기기' : '🟢 빈 시간 보기';
+  document.getElementById('toggleFreeBtn').textContent = showFree ? '빈 시간 숨기기' : '빈 시간 보기';
   render();
 }
 function saveDataLocal() { localStorage.setItem('scheduleEvents', JSON.stringify(events)); }
@@ -2194,7 +2416,7 @@ function renderCrmTickets() {
 
   if (crmTickets.length === 0) {
     box.style.display = 'block';
-    box.innerHTML = `<div class="ct-head">📋 배포지원 요청 티켓
+    box.innerHTML = `<div class="ct-head">배포지원 요청
       <span class="ct-sync">${esc(sync)}</span></div>
       <div class="ct-empty">처리할 배포지원요청 티켓이 없습니다.</div>`;
     return;
@@ -2206,7 +2428,7 @@ function renderCrmTickets() {
       ? `${t.periodFrom}${t.periodTo ? ` ~ ${t.periodTo}` : ''}`
       : '<span style="color:#b0b7c9;">본문에 기재 없음</span>';
     const badge = a
-      ? `<span class="ct-badge done">✅ ${esc(a.name)} 배정됨</span>`
+      ? `<span class="ct-badge done">${esc(a.name)} 배정됨</span>`
       : `<span class="ct-badge wait">배정 필요</span>`;
     return `<div class="ct-card ${a ? 'assigned' : ''}">
       <div>
@@ -2224,13 +2446,13 @@ function renderCrmTickets() {
       <div class="ct-actions">
         ${a
           ? `<span class="ct-meta">${esc(a.from)} ~ ${esc(a.to)} (${a.days}일)</span>`
-          : `<button class="ct-btn primary" onclick="assignFromTicket('${esc(t.ticketNo)}')">🎲 이 티켓으로 배정</button>`}
+          : `<button class="ct-btn primary" onclick="assignFromTicket('${esc(t.ticketNo)}')">이 티켓으로 배정</button>`}
       </div>
     </div>`;
   }).join('');
 
   box.style.display = 'block';
-  box.innerHTML = `<div class="ct-head">📋 배포지원 요청 티켓
+  box.innerHTML = `<div class="ct-head">배포지원 요청
       <span class="ct-count">${crmTickets.length}</span>
       <span class="ct-sync">${esc(sync)}</span></div>
     <div class="ct-list">${cards}</div>`;
@@ -2305,7 +2527,7 @@ async function syncOutlook() {
 
   const btn = document.getElementById('syncBtn');
   btn.classList.add('syncing');
-  btn.textContent = '☁️ 동기화 중...';
+  btn.textContent = '동기화 중…';
 
   try {
     // 보고 있는 주 -7일 ~ (그 주 +4주 / 오늘 +3개월 중 늦은 날) — Notion 공유 데이터와 병합
@@ -2333,7 +2555,7 @@ async function syncOutlook() {
     showToast(`동기화 실패: ${err.message}`);
   } finally {
     btn.classList.remove('syncing');
-    btn.textContent = '☁️ 아웃룩 동기화';
+    btn.textContent = '동기화';
   }
 }
 
@@ -2762,6 +2984,7 @@ function resetPendingWinner() {
   localStorage.removeItem('pendingWinner');
   currentWinner = null;
   lastWinner    = null;
+  if (wheelSlices.length) drawWheelAt(wheelRot);   // 다이얼의 당첨 강조 해제
 
   // ✅ 초기화 이력 Notion에 기록 (추적용 — rrOrder 영향 없음)
   if (pw && WORKER_URL) {
@@ -2908,7 +3131,7 @@ function renderUnavailReasons() {
     : pool()
         .filter(m => !isMemberAvailableInRange(m.id, ds, de, st, et))
         .map(m => `<div class="ur-row"><span class="ur-name">${esc(m.name)}</span>${getUnavailReason(m.id, ds, de, st, et).map(esc).join(' / ')}</div>`);
-  box.innerHTML = rows.length ? `<div class="ur-title">🚫 배포 불가 사유</div>${rows.join('')}` : '';
+  box.innerHTML = rows.length ? `<div class="ur-title">배포 불가 사유</div>${rows.join('')}` : '';
 }
 
 function drawWheelAt(rot) {
@@ -2922,51 +3145,76 @@ function drawWheelAt(rot) {
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+  // 금고 다이얼 디자인 (v2). 칸 배치·각도 계산은 이전과 동일 — spinWheel의 정지 위치 역산과 맞물려 있음.
+  // 모든 칸을 같은 색·같은 크기로 그려 "동일 확률 추첨"을 그대로 보여준다.
+  const INK = '#1C2433', COBALT = '#2B3A8C', VERDIGRIS = '#0E7C66';
+  const font = "'IBM Plex Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif";
+  const ringW = 16;               // 바깥 눈금 링 두께
+  const rIn = r - ringW;          // 칸이 그려지는 반지름
+  const winnerId = (!spinning && lastWinner) ? lastWinner.id : null;
+
+  // 바깥 링 + 눈금 (링도 함께 회전해 '돌아가는 다이얼'로 보이게)
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+  ctx.fillStyle = INK;
+  ctx.fill();
+  for (let t = 0; t < 60; t++) {
+    const a = rot + (t / 60) * 2 * Math.PI - Math.PI / 2;
+    const long = t % 5 === 0;
+    const r1 = r - 3, r2 = r - (long ? 11 : 7);
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1);
+    ctx.lineTo(cx + Math.cos(a) * r2, cy + Math.sin(a) * r2);
+    ctx.strokeStyle = long ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.28)';
+    ctx.lineWidth = long ? 1.6 : 1;
+    ctx.stroke();
+  }
+
   wheelSlices.forEach((m, i) => {
     const startA = rot + i * arc - Math.PI / 2;
     const endA   = rot + (i + 1) * arc - Math.PI / 2;
+    const isWinner = winnerId != null && m.id === winnerId;
 
-    // Slice fill
     ctx.beginPath();
     ctx.moveTo(cx, cy);
-    ctx.arc(cx, cy, r, startA, endA);
+    ctx.arc(cx, cy, rIn, startA, endA);
     ctx.closePath();
-    ctx.fillStyle = WHEEL_COLORS[i % WHEEL_COLORS.length];
+    ctx.fillStyle = isWinner ? VERDIGRIS : COBALT;
     ctx.fill();
-    ctx.strokeStyle = 'white';
-    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)';   // 칸 경계는 가는 선
+    ctx.lineWidth = 1;
     ctx.stroke();
 
-    // Member name text
     ctx.save();
     ctx.translate(cx, cy);
     ctx.rotate(rot + i * arc + arc / 2 - Math.PI / 2);
     ctx.textAlign = 'right';
-    ctx.fillStyle = 'white';
-    ctx.font = `bold ${n <= 3 ? 15 : 13}px 'Apple SD Gothic Neo', 'Segoe UI', sans-serif`;
-    ctx.shadowColor = 'rgba(0,0,0,0.35)';
-    ctx.shadowBlur = 4;
-    ctx.fillText(m.name, r - 14, 5);
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = isWinner ? '#FFFFFF' : 'rgba(255,255,255,0.92)';
+    ctx.font = `${isWinner ? 700 : 600} ${n <= 3 ? 15 : 13}px ${font}`;
+    ctx.fillText(m.name, rIn - 12, 0);
     ctx.restore();
   });
 
-  // Center hub
+  // 중앙 손잡이
   ctx.beginPath();
-  ctx.arc(cx, cy, 20, 0, 2 * Math.PI);
-  ctx.fillStyle = 'white';
-  ctx.shadowColor = 'rgba(0,0,0,0.1)';
-  ctx.shadowBlur = 6;
+  ctx.arc(cx, cy, 28, 0, 2 * Math.PI);
+  ctx.fillStyle = '#FFFFFF';
   ctx.fill();
-  ctx.shadowBlur = 0;
-  ctx.strokeStyle = '#e0e0e0';
-  ctx.lineWidth = 2;
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = INK;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(cx, cy, 22, 0, 2 * Math.PI);
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = '#DFE3EA';
   ctx.stroke();
 
-  ctx.fillStyle = '#1a237e';
-  ctx.font = 'bold 11px sans-serif';
+  ctx.fillStyle = INK;
+  ctx.font = `600 11px ${font}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('SPIN', cx, cy);
+  ctx.fillText(winnerId != null ? '잠김' : '돌리기', cx, cy);
 }
 
 function spinWheel() {
@@ -3019,6 +3267,7 @@ function spinWheel() {
       wheelRot = startRot + totalDelta;
       spinning = false;
       lastWinner = winner;
+      drawWheelAt(wheelRot);   // 멈춘 뒤 당첨 칸을 강조해 다시 그림
 
       // 결과 표시
       const banner = document.getElementById('resultBanner');
@@ -3238,10 +3487,10 @@ async function loadStats() {
   const rows = s.members.map(m => {
     const w = Math.round(m.count / max * 100);
     return `<tr>
-      <td style="padding:5px 8px;white-space:nowrap;font-weight:600;color:#1a237e;">${esc(m.name)}${m.extra ? ' <span style="font-weight:400;color:#999;font-size:10px;">추가</span>' : ''}</td>
+      <td style="padding:5px 8px;white-space:nowrap;font-weight:600;color:#1C2433;">${esc(m.name)}${m.extra ? ' <span style="font-weight:400;color:#999;font-size:10px;">추가</span>' : ''}</td>
       <td style="padding:5px 8px;width:100%;">
-        <div style="background:#eceff1;border-radius:4px;height:14px;position:relative;">
-          <div style="background:${m.count === 0 ? '#ef9a9a' : '#5c6bc0'};width:${w}%;height:100%;border-radius:4px;"></div>
+        <div style="background:#ECEFF4;border-radius:4px;height:12px;position:relative;">
+          <div style="background:${m.count === 0 ? '#E8B4AE' : '#2B3A8C'};width:${w}%;height:100%;border-radius:4px;"></div>
         </div>
       </td>
       <td style="padding:5px 8px;text-align:right;white-space:nowrap;font-weight:700;">${m.count}회</td>
@@ -3261,11 +3510,11 @@ async function loadStats() {
       <div class="ur-title">⚠️ 한 번도 배정되지 않은 인원</div>
       <div class="ur-row">${never.map(esc).join(' · ')}</div></div>` : ''}
     <table style="width:100%;border-collapse:collapse;font-size:12px;">
-      <thead><tr style="color:#888;font-size:10px;text-transform:uppercase;">
+      <thead><tr style="color:#5E6A7D;font-size:11px;">
         <th style="text-align:left;padding:4px 8px;">멤버</th><th></th>
-        <th style="text-align:right;padding:4px 8px;">횟수</th>
-        <th style="text-align:right;padding:4px 8px;">비율</th>
-        <th style="text-align:right;padding:4px 8px;">최근 배정</th>
+        <th style="text-align:right;padding:4px 8px;white-space:nowrap;">횟수</th>
+        <th style="text-align:right;padding:4px 8px;white-space:nowrap;">비율</th>
+        <th style="text-align:right;padding:4px 8px;white-space:nowrap;">최근 배정</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>
