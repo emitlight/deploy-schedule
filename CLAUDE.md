@@ -78,6 +78,27 @@ Cloudflare Worker  ← 유일한 판단 주체
 
 ---
 
+## CRM 연동 (2026-10-19)
+
+CRM 배포지원요청 티켓의 **담당자가 원천**이다. 양방향으로 맞춘다.
+
+**CRM → 대시보드** (서버 `applyCrmAssignments`)
+- 티켓은 **접수 담당자(기본 이하영, 예전 오정훈 상무)** 에게 먼저 들어온다 → 이 사람이 담당이면 **배정 필요**.
+  ⚠️ 이하영은 배정 대상 멤버이기도 하므로, CRM 담당이 이하영이면 자동 배정하지 않는다.
+- 담당자가 명단 멤버면 요청 기간 평일마다 배포지원 일정 자동 생성(노트 `CRM 담당자 자동 반영 · TT…`) + 배정 기록 1건.
+- 같은 사람에게 수동 등록된 일정이 있으면 티켓번호만 연결. 사람이 등록한 배정과 담당자가 다르면 덮어쓰지 않고 '담당 불일치' 표시.
+- 자동 생성분은 CRM 담당자·기간 변경을 따라간다. 지난 날짜·종료 티켓은 지우지 않는다. 쓰기 상한으로 나눠 처리(멱등).
+
+**대시보드 → CRM** (파트너센터와 같은 방식)
+- 티켓 카드 '이 티켓으로 배정' → 일정 저장 시 `queue-crm-assign` 으로 요청 등록.
+- 사내 서버의 `sync/crm-deploy-tickets-sync.js` 가 요청을 가져가 **CRM 공식 API(webservice `revise`)** 로
+  `assigned_user_id`(19x사용자) + `cf_2576`(담당자명, 10자) 변경 → `ack-crm-assign` 으로 결과 보고. 3회 실패 시 카드에 안내.
+- 접속 계정은 파트너센터 `.env` 의 `VTIGER_API_URL/USER/ACCESSKEY`. 끄려면 `CRM_ASSIGN_WRITE=0`.
+- 사내 스크립트 위치: 파트너센터 서버 `/opt/deploy-schedule-sync`, 실행 주기 평일 07~20시 10분마다.
+  갱신은 `python "sync/서버_업데이트.py"` (사용자가 직접 실행 — 서버 비밀번호 필요).
+
+---
+
 ## 대상 인원
 
 기본 8명 (ID 1~8): 이송민 · 이하영 · 강진혁 · 김선우 · 김요엘 · 윤이나 · 이정기 · 김정환
@@ -140,7 +161,10 @@ Worker의 KV(`SETTINGS` / 키 `roster-config`)에 저장되어 **모든 PC에 �
 | `get-roster` | 멤버 명단 + 공유 설정 (가벼움, 외부 API 호출 없음) |
 | `set-roster-config` | 추가 인원 포함/제외 설정 저장 (KV, 전 PC 공유) |
 | `get-crm-tickets` | CRM 배포지원요청 티켓 목록 (KV `crm-tickets`) |
-| `ingest-crm-tickets` | 사내 동기화 스크립트가 티켓을 밀어 넣음 (X-Auth=`INGEST_TOKEN` 전용) |
+| `ingest-crm-tickets` | 사내 동기화 스크립트가 티켓을 밀어 넣음 (X-Auth=`INGEST_TOKEN`) → 직후 CRM 담당자 배정 반영 |
+| `apply-crm-assignments` | CRM 담당자 → 대시보드 배정 반영 수동 실행 (Cron 3회에도 자동 실행) |
+| `queue-crm-assign` | 대시보드에서 '이 티켓으로 배정' 확정 시 CRM 담당자 변경 요청 등록 (KV `crm-assign-queue`) |
+| `get-crm-assign-queue` / `ack-crm-assign` | 사내 스크립트가 요청을 가져가 CRM에 반영하고 결과 보고 (`INGEST_TOKEN`) |
 | `get-stats` | 멤버별 배정 통계 (공정성 증명) |
 | `sync-outlook` | 아웃룩 조회 (Notion 저장 안 함) |
 | `run-sync` | Cron과 동일한 동기화 수동 실행 → 실제 집계 반환 |
@@ -162,7 +186,8 @@ MEMBER_EMAILS  {"이하영":"hayoung.lee@softcamp.co.kr", ...}
 MEMBER_IDS     {"이하영":2, "이송민":1, ...}
 INCLUDE_EXTRA  추가 후보 3명 포함 여부의 기본값 (KV 미설정 시에만 사용)
 SETTINGS       KV 바인딩 — 공유 설정·CRM 티켓 저장소 (wrangler.toml에 연결됨)
-INGEST_TOKEN   CRM 티켓 동기화 스크립트 전용 토큰 (ingest-crm-tickets 만 허용)
+INGEST_TOKEN   CRM 동기화 스크립트 전용 토큰 (ingest-crm-tickets · get-crm-assign-queue · ack-crm-assign 만 허용)
+CRM_QUEUE_OWNERS  CRM 접수 담당자(= 아직 배정 전) 목록. 기본 "이하영,오정훈"
 NOTION_SECRET(⭐) / SCHEDULES_DB_ID / SPINLOG_DB_ID
 VTIGER_URL / VTIGER_USERNAME / VTIGER_ACCESS_KEY(⭐) / VTIGER_MEMBER_IDS
 ```

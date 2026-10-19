@@ -6,6 +6,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { pathToFileURL } from 'url';
+import crypto from 'crypto';
 
 let p = 0, f = 0;
 const ok = (l, c, x = '') => { console.log(`  ${c ? '✅' : '❌'} ${l}${c ? '' : '  ' + x}`); c ? p++ : f++; };
@@ -107,9 +108,9 @@ ok('연결로 집계', r.assignments.linked === 1);
 
 console.log('\n[5] 사람이 등록한 배정과 CRM 담당자가 다르면 덮어쓰지 않고 불일치 보고');
 reset([{ pageId: 'H1', memberId: 4, date: '2026-10-21', title: '배포지원', note: '', ticketNo: 'TT4' }]);
-r = await call('ingest-crm-tickets', { tickets: [T('TT4', '이하영', '2026-10-21', '2026-10-21')] }, 'ing');
+r = await call('ingest-crm-tickets', { tickets: [T('TT4', '이송민', '2026-10-21', '2026-10-21')] }, 'ing');
 ok('기존 일정 그대로', live().length === 1 && prop(live()[0], '멤버ID') === 4);
-ok('불일치 보고', r.assignments.mismatch.length === 1 && r.assignments.mismatch[0].crm === '이하영', JSON.stringify(r.assignments.mismatch));
+ok('불일치 보고', r.assignments.mismatch.length === 1 && r.assignments.mismatch[0].crm === '이송민', JSON.stringify(r.assignments.mismatch));
 
 console.log('\n[6] 자동 생성분은 CRM 담당자 변경을 따라 이동 (지난 날짜는 이력으로 남김)');
 reset([{ pageId: 'A0', memberId: 8, date: '2020-01-06', title: '배포지원', note: 'CRM 담당자 자동 반영 · TT5', ticketNo: 'TT5', spinLogPageId: 'SPOLD' },
@@ -133,6 +134,34 @@ ok('Cron(상한 15)에서는 20일짜리를 만들지 않음', live().filter(x =
 r = await call('apply-crm-assignments');
 ok('상한 40인 실행에서 20일 생성', live().filter(x => prop(x, '티켓번호') === 'TT6').length === 20, String(live().length));
 
+console.log('\n[7-1] 접수 담당자(이하영·오정훈)가 담당이면 배정 전으로 본다');
+reset();
+r = await call('ingest-crm-tickets', { tickets: [T('TT7', '이하영', '2026-10-19', '2026-10-20'), T('TT8', '오정훈', '2026-10-19', '2026-10-20')] }, 'ing');
+ok('일정 자동 생성 없음', live().length === 0);
+ok('둘 다 대기로 분류', r.assignments.waiting === 2, JSON.stringify(r.assignments));
+
+console.log('\n[7-2] CRM 담당자 변경 요청 대기열');
+kv.delete('crm-assign-queue');
+r = await call('queue-crm-assign', { ticketNo: 'TT7', ticketId: '1796791', memberName: '김정환' });
+ok('대시보드(사용자)가 요청 등록', r.ok && r.queued.status === 'pending');
+r = await call('queue-crm-assign', { ticketNo: 'TT7', memberName: '홍길동' });
+ok('명단 밖 이름은 거부', !r.ok);
+r = await call('queue-crm-assign', { ticketNo: 'TT7', memberName: '이송민' }, 'ing');
+ok('기계 토큰으로는 요청 등록 불가(최소 권한)', !r.ok);
+r = await call('get-crm-assign-queue', {}, 'ing');
+ok('사내 스크립트가 대기 건 조회', r.ok && r.items.length === 1 && r.items[0].memberName === '김정환');
+const reqAt = r.items[0].requestedAt;
+r = await call('get-crm-tickets');
+ok('티켓 조회에 대기열 포함(카드 표시용)', Array.isArray(r.assignQueue) && r.assignQueue.length === 1);
+for (let i = 0; i < 3; i++) await call('ack-crm-assign', { results: [{ ticketNo: 'TT7', requestedAt: reqAt, ok: false, error: 'boom' }] }, 'ing');
+r = await call('get-crm-tickets');
+ok('3번 실패하면 failed + 오류 기록', r.assignQueue[0].status === 'failed' && r.assignQueue[0].error === 'boom', JSON.stringify(r.assignQueue[0]));
+await call('queue-crm-assign', { ticketNo: 'TT7', memberName: '김정환' });
+const q2 = (await call('get-crm-assign-queue', {}, 'ing')).items[0];
+await call('ack-crm-assign', { results: [{ ticketNo: 'TT7', requestedAt: q2.requestedAt, ok: true }] }, 'ing');
+r = await call('get-crm-assign-queue', {}, 'ing');
+ok('성공 보고 후 대기 건 없음', r.items.length === 0);
+
 console.log('\n[8] 아웃룩 일시 오류는 자동 재시도 → 후보에서 빠지지 않음');
 graphFailOnce = new Set(['c@x']);
 const av = await call('get-availability', { startDate: '2026-12-01', endDate: '2026-12-01' });
@@ -140,6 +169,60 @@ const kang = av.members.find(m => m.id === 3);
 ok('503 한 번 뒤 성공 → 정상 판정', kang && kang.stale === false && kang.available === true, JSON.stringify(kang));
 
 fs.unlinkSync(tmp);
+
+// ════════════════════════════════════════════════════════════════════════
+// 사내 동기화 스크립트 — CRM 담당자 변경 (파트너센터와 같은 revise 절차)
+// ════════════════════════════════════════════════════════════════════════
+console.log('\n[8-1] 사내 스크립트: 대기 요청 → CRM API revise → 결과 보고');
+{
+  const { createRequire } = await import('module');
+  const src = fs.readFileSync('sync/crm-deploy-tickets-sync.js', 'utf8')
+    .replace("const mariadb = require('mariadb');", 'const mariadb = {};')
+    .split('// ── 메인 ──')[0] + '\nmodule.exports = { processAssignQueue };\n';
+  const stmp = path.join(os.tmpdir(), `sync_${Date.now()}.cjs`);
+  fs.writeFileSync(stmp, src);
+  Object.assign(process.env, { WORKER_URL: 'https://w/', INGEST_TOKEN: 'ing', VTIGER_API_URL: 'https://crm/webservice.php',
+    VTIGER_API_USER: 'apiuser', VTIGER_API_ACCESSKEY: 'KEY', PARTNERCENTER_ENV: '/nonexistent' });
+  const { processAssignQueue } = createRequire(import.meta.url)(stmp);
+  const sent = [];
+  globalThis.fetch = async (u, init = {}) => {
+    const url = String(u);
+    const json = o => new Response(JSON.stringify(o), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    if (url.startsWith('https://w/')) {
+      const a = init.headers['X-Action']; const body = JSON.parse(init.body || '{}');
+      sent.push({ a, body, auth: init.headers['X-Auth'] });
+      if (a === 'get-crm-assign-queue') return json({ ok: true, items: [
+        { ticketNo: 'TT1', ticketId: '1796791', memberName: '김정환', requestedAt: 'r1' },
+        { ticketNo: 'TT2', ticketId: '', memberName: '없는사람', requestedAt: 'r2' }] });
+      return json({ ok: true });
+    }
+    if (url.includes('operation=getchallenge')) return json({ success: true, result: { token: 'TOK' } });
+    const params = Object.fromEntries(new URLSearchParams(init.body || ''));
+    sent.push({ a: 'crm:' + params.operation, params });
+    if (params.operation === 'login') return json({ success: true, result: { sessionName: 'S1' } });
+    if (params.operation === 'revise') return json({ success: true, result: {} });
+    return json({ success: false });
+  };
+  const pool = { query: async (sql, args) => {
+    if (sql.includes('vtiger_users')) return args[0] === '김정환' ? [{ id: 55, last_name: '김정환' }] : [];
+    if (sql.includes('vtiger_troubletickets')) return [{ ticketid: 999 }];
+    return [];
+  } };
+  await processAssignQueue(pool);
+  const login = sent.find(s => s.a === 'crm:login');
+  ok('로그인 해시 = md5(token + accessKey)', login && login.params.accessKey === crypto.createHash('md5').update('TOKKEY').digest('hex'));
+  const rev = sent.find(s => s.a === 'crm:revise');
+  const el = rev && JSON.parse(rev.params.element);
+  ok('revise 대상 = 티켓 17x1796791', el && el.id === '17x1796791', JSON.stringify(el));
+  ok('담당자 = 사용자 19x55', el && el.assigned_user_id === '19x55');
+  ok('담당자명(cf_2576)도 함께 변경', el && el.cf_2576 === '김정환');
+  const ack = sent.find(s => s.a === 'ack-crm-assign');
+  ok('결과 보고: 1건 성공·1건 실패(사용자 없음)', ack && ack.body.results.length === 2 &&
+     ack.body.results[0].ok === true && ack.body.results[1].ok === false && /같은 이름이 없음/.test(ack.body.results[1].error),
+     JSON.stringify(ack && ack.body));
+  ok('Worker 호출은 기계 토큰 사용', sent.filter(s => s.auth).every(s => s.auth === 'ing'));
+  fs.unlinkSync(stmp);
+}
 
 // ════════════════════════════════════════════════════════════════════════
 // 화면 — 티켓 카드 상태 · 통계 배정 내역
@@ -166,7 +249,8 @@ const patched = hjs.replace(/const WORKER_URL = [^;]+;/, `const WORKER_URL='http
   .replace(/\bdocument\.addEventListener\('DOMContentLoaded'[\s\S]*?\}\);/g, '');
 const M = await import('data:text/javascript,' + encodeURIComponent(patched + `
 ;export const api = { renderCrmTickets, loadStats, toggleStatDetail, statItemsFromLog,
-  setEvents(v){ events = v; }, setCrm(v, info){ crmTickets = v; crmSyncInfo = info; }, setSpinLog(v){ notionSpinLog = v; } };`));
+  setEvents(v){ events = v; }, setCrm(v, info){ crmTickets = v; crmSyncInfo = info; }, setSpinLog(v){ notionSpinLog = v; },
+  setQueue(v){ crmAssignQueue = v; } };`));
 const A = M.api;
 const $ = id => document.getElementById(id);
 
@@ -188,7 +272,23 @@ ok('TT1: CRM 담당 김정환 · 자동 반영 대기', /CRM 담당 김정환 ·
 ok('TT1: 돌림판 버튼 숨김', !/이 티켓으로 배정/.test(card('TT1')));
 ok('TT2: 윤이나 배정됨 · CRM 연동', /윤이나 배정됨 · CRM 연동/.test(card('TT2')));
 ok('TT3: 접수 큐 → 배정 필요 + 버튼', /배정 필요/.test(card('TT3')) && /이 티켓으로 배정/.test(card('TT3')));
-ok('TT4: 담당 불일치 경고', /담당 불일치 · CRM 이하영 \/ 대시보드 김선우/.test(card('TT4')), card('TT4').slice(0, 300));
+ok('TT4: CRM 담당이 접수 담당자(이하영)면 불일치 아님 → 김선우 배정됨', /김선우 배정됨/.test(card('TT4')) && !/불일치/.test(card('TT4')), card('TT4').slice(0, 300));
+
+A.setCrm([{ ticketNo: 'TT5', assignee: '이하영', account: '[고객사]', periodFrom: '2026-10-23', periodTo: '2026-10-23', title: 'e' },
+          { ticketNo: 'TT6', assignee: '김요엘', account: '[고객사]', periodFrom: '2026-10-23', periodTo: '2026-10-23', title: 'f' }],
+         { configured: true, syncedAt: new Date().toISOString(), ageHours: 0 });
+A.setEvents([{ id: 'e3', type: 'deploy', memberId: 4, date: '2026-10-23', ticketNo: 'TT6', note: '' }]);
+A.renderCrmTickets();
+const html2 = $('crmTickets').innerHTML;
+const card2 = no => html2.split('class="ct-card').find(c => c.includes(`>${no}<`)) || '';
+ok('TT5: 담당 이하영(접수) → 배정 필요 + 버튼', /배정 필요/.test(card2('TT5')) && /이 티켓으로 배정/.test(card2('TT5')));
+ok('TT6: 사람이 등록한 배정(김선우)과 CRM(김요엘) 불일치 경고', /담당 불일치 · CRM 김요엘 \/ 대시보드 김선우/.test(card2('TT6')));
+A.setQueue([{ ticketNo: 'TT5', memberName: '김정환', status: 'pending' }]);
+A.renderCrmTickets();
+ok('변경 요청 대기 표시', /CRM 담당자 → 김정환 변경 대기/.test($('crmTickets').innerHTML));
+A.setQueue([{ ticketNo: 'TT5', memberName: '김정환', status: 'failed', error: 'x' }]);
+A.renderCrmTickets();
+ok('변경 실패 시 직접 변경 안내', /CRM 반영 실패/.test($('crmTickets').innerHTML));
 
 console.log('\n[10] 배정 통계 — 멤버를 누르면 배정 내역');
 A.setEvents([{ id: 'd1', type: 'deploy', memberId: 8, date: '2026-10-19', ticketNo: 'TT1', spinLogPageId: 'L1' }]);

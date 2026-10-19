@@ -9,9 +9,15 @@
  *   방향이 '안 → 밖'이라 인바운드 방화벽을 열 필요가 없다.
  *
  * 하는 일:
+ *   0) 대시보드에서 '이 티켓으로 배정'한 건의 CRM 담당자 변경 요청을 가져와 반영
+ *      — 파트너센터와 같은 방식: CRM 공식 API(webservice.php → revise) + 담당자명(cf_2576) 동기화
+ *      — 접속 계정은 파트너센터 .env 의 VTIGER_API_URL / VTIGER_API_USER / VTIGER_API_ACCESSKEY
+ *      — 끄려면 CRM_ASSIGN_WRITE=0
  *   1) CRM에서 지원유형=배포지원요청 + 담당자가 커뮤니케이션본부인 미종료 티켓 조회 (SELECT만)
  *   2) 본문에서 '배포관리 요청일' 기간을 추출
  *   3) Worker의 ingest-crm-tickets 로 POST
+ *
+ * 권장 실행 주기: 10분 (담당자 변경이 대시보드 배정 후 10분 안에 CRM에 반영되도록)
  *
  * 실행: node crm-deploy-tickets-sync.js [--dry-run]
  * 설정: 같은 폴더의 .env (CRM_DB_* 는 파트너센터 .env 에서 자동으로 읽어옴)
@@ -78,6 +84,95 @@ function parseField(desc, label) {
   return m ? m[1].trim() : '';
 }
 
+// ── Worker 호출 (기계 토큰) ──────────────────────────────────────────────
+async function workerCall(action, body = {}) {
+  const res = await fetch(WORKER_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Action': action, 'X-Auth': INGEST_TOKEN },
+    body: JSON.stringify(body),
+  });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok || !out.ok) throw new Error(`${action} 실패 HTTP ${res.status}: ${out.error || '(응답 없음)'}`);
+  return out;
+}
+
+// ── CRM 공식 API (파트너센터 backend/src/utils/vtigerApi.js 와 같은 절차) ──
+// getchallenge → login(md5(token + accessKey)) → revise
+const crypto = require('crypto');
+async function vtLogin(url, user, accessKey) {
+  const ch = await (await fetch(`${url}?operation=getchallenge&username=${encodeURIComponent(user)}`)).json();
+  if (!ch.success) throw new Error('getchallenge 실패: ' + JSON.stringify(ch.error));
+  const hashed = crypto.createHash('md5').update(ch.result.token + accessKey).digest('hex');
+  const lr = await vtPost(url, { operation: 'login', username: user, accessKey: hashed });
+  if (!lr.success) throw new Error('login 실패: ' + JSON.stringify(lr.error));
+  return lr.result.sessionName;
+}
+async function vtPost(url, params) {
+  const res = await fetch(url, { method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams(params).toString() });
+  return res.json();
+}
+
+// 대시보드에서 '이 티켓으로 배정'한 건 → CRM 담당자를 그 사람으로 변경
+async function processAssignQueue(pool) {
+  if (cfg('CRM_ASSIGN_WRITE') === '0') { log('CRM 담당자 변경: 꺼짐(CRM_ASSIGN_WRITE=0)'); return; }
+  if (!WORKER_URL || !INGEST_TOKEN) return;
+  let items;
+  try { items = (await workerCall('get-crm-assign-queue')).items || []; }
+  catch (e) { console.error('담당자 변경 요청 조회 실패:', e.message); return; }
+  if (items.length === 0) return;
+
+  const url = (cfg('VTIGER_API_URL') || '').trim();
+  const user = (cfg('VTIGER_API_USER') || '').trim();
+  const accessKey = (cfg('VTIGER_API_ACCESSKEY') || '').trim();
+  if (!url || !user || !accessKey) {
+    console.error('설정 누락: VTIGER_API_URL / VTIGER_API_USER / VTIGER_API_ACCESSKEY (파트너센터 .env) — 담당자 변경 건너뜀');
+    return;
+  }
+  // webservice id 접두사 — 파트너센터와 같은 기본값·같은 환경변수(VT_WS_*)
+  const WS_USERS = Number(cfg('VT_WS_USERS')) || 19;
+  const WS_HELPDESK = Number(cfg('VT_WS_HELPDESK')) || 17;
+  const CF_2576_MAX = 10;   // 담당자명 필드 varchar(10) — 넘기면 CRM이 거부
+
+  let session = null;
+  const results = [];
+  for (const it of items) {
+    const tag = `[${it.ticketNo} → ${it.memberName}]`;
+    try {
+      let ticketId = String(it.ticketId || '').trim();
+      if (!/^\d+$/.test(ticketId)) {
+        const t = await pool.query('SELECT ticketid FROM vtiger_troubletickets WHERE ticket_no = ? LIMIT 1', [it.ticketNo]);
+        if (!t.length) throw new Error('CRM에서 티켓을 찾지 못함');
+        ticketId = String(t[0].ticketid);
+      }
+      const users = await pool.query(
+        "SELECT id, last_name FROM vtiger_users WHERE TRIM(last_name) = ? AND status = 'Active'", [it.memberName]);
+      if (users.length === 0) throw new Error('CRM 활성 사용자 중 같은 이름이 없음');
+      if (users.length > 1) throw new Error('같은 이름의 CRM 사용자가 여러 명 — CRM에서 직접 지정 필요');
+      const element = {
+        id: `${WS_HELPDESK}x${ticketId}`,
+        assigned_user_id: `${WS_USERS}x${users[0].id}`,
+        cf_2576: String(users[0].last_name || '').trim().slice(0, CF_2576_MAX),   // 목록 표시용 담당자명(파트너센터와 동일)
+      };
+      if (DRY) { log(`  ${tag} (dry-run) revise 예정:`, JSON.stringify(element)); continue; }
+      session = session || await vtLogin(url, user, accessKey);
+      const r = await vtPost(url, { operation: 'revise', sessionName: session, elementType: 'HelpDesk',
+                                    element: JSON.stringify(element) });
+      if (!r.success) throw new Error((r.error && (r.error.message || r.error.code)) || 'revise 실패');
+      log(`  ${tag} CRM 담당자 변경 완료`);
+      results.push({ ticketNo: it.ticketNo, requestedAt: it.requestedAt, ok: true });
+    } catch (e) {
+      console.error(`  ${tag} 실패:`, e.message);
+      results.push({ ticketNo: it.ticketNo, requestedAt: it.requestedAt, ok: false, error: e.message });
+    }
+  }
+  if (!DRY && results.length) {
+    try { await workerCall('ack-crm-assign', { results }); }
+    catch (e) { console.error('처리 결과 보고 실패:', e.message); }
+  }
+}
+
 // ── 메인 ─────────────────────────────────────────────────────────────────
 (async () => {
   for (const k of ['CRM_DB_HOST', 'CRM_DB_USER', 'CRM_DB_PASSWORD']) {
@@ -94,6 +189,9 @@ function parseField(desc, label) {
     charset: 'utf8mb4', connectionLimit: 2, connectTimeout: 15000,
     acquireTimeout: 20000, bigIntAsNumber: true, allowPublicKeyRetrieval: true,
   });
+
+  // 0) 담당자 변경 요청을 먼저 반영 — 아래에서 다시 읽는 티켓 목록에 새 담당자가 바로 나타나게
+  await processAssignQueue(pool);
 
   // 지원유형은 원문·번역값 어느 쪽이 저장돼 있어도 잡히도록 둘 다 본다.
   // 상태는 종료(Closed/닫힘)만 제외 — 미종료 건이 전체의 1% 미만이라 범위가 작다.

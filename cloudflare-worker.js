@@ -39,10 +39,11 @@ export default {
     const auth   = request.headers.get('X-Auth') || '';
 
     // 사람(대시보드)은 APP_PASSWORD, 기계(사내 동기화 스크립트)는 INGEST_TOKEN.
-    // 기계 토큰은 티켓 적재 한 가지만 할 수 있다(최소 권한) — 유출돼도 일정·이력을 건드릴 수 없다.
+    // 기계 토큰은 CRM 연동 동작만 할 수 있다(최소 권한) — 유출돼도 일정·이력을 건드릴 수 없다.
+    //   티켓 적재 / CRM 담당자 변경 요청 가져가기 / 처리 결과 보고
     const isUser    = safeEqual(auth, env.APP_PASSWORD);
     const isIngest  = !!env.INGEST_TOKEN && safeEqual(auth, env.INGEST_TOKEN);
-    const INGEST_ONLY_ACTIONS = new Set(['ingest-crm-tickets']);
+    const INGEST_ONLY_ACTIONS = new Set(['ingest-crm-tickets', 'get-crm-assign-queue', 'ack-crm-assign']);
     if (!isUser && !(isIngest && INGEST_ONLY_ACTIONS.has(action))) {
       return new Response(JSON.stringify({ ok:false, error:'unauthorized' }),
         { status:401, headers:{ ...CORS, 'Content-Type':'application/json' } });
@@ -199,6 +200,59 @@ export default {
           try { assignments = await applyCrmAssignments(env, clean, { maxWrites: 40 }); }
           catch (e) { console.error('[crm-assign] 실패:', e.message); assignments = { ok: false, error: e.message }; }
           result = { ok: true, stored: clean.length, syncedAt: payload.syncedAt, assignments };
+          break;
+        }
+
+        // ── CRM 담당자 변경 요청 (대시보드에서 티켓으로 배정 확정 시) ─────
+        // Cloudflare에서는 CRM에 닿지 않으므로 요청을 쌓아 두고, 사내 동기화 스크립트가
+        // 가져가 파트너센터와 같은 방식(CRM API vtws_revise)으로 담당자를 바꾼다.
+        case 'queue-crm-assign': {
+          if (!env.SETTINGS) throw Object.assign(new Error('KV(SETTINGS) 미설정'), { status: 501 });
+          const ticketNo = String(body?.ticketNo || '').slice(0, 30);
+          const memberName = String(body?.memberName || '').trim();
+          if (!ticketNo || !memberName) throw new Error('ticketNo, memberName 필요');
+          if (!buildRoster(env, true).some(m => m.name === memberName))
+            throw Object.assign(new Error('명단에 없는 멤버입니다'), { status: 400 });
+          const q = await readAssignQueue(env);
+          const item = { ticketNo, ticketId: String(body?.ticketId || '').slice(0, 20), memberName,
+            requestedAt: new Date().toISOString(), by: String(body?.by || '대시보드').slice(0, 40),
+            status: 'pending', attempts: 0, error: null };
+          // 같은 티켓은 마지막 요청만 유지
+          const next = q.filter(x => x.ticketNo !== ticketNo).concat(item).slice(-100);
+          await env.SETTINGS.put(CRM_ASSIGN_QUEUE_KEY, JSON.stringify(next));
+          result = { ok: true, queued: item };
+          break;
+        }
+
+        // ── 사내 스크립트가 처리할 요청 목록 (INGEST_TOKEN) ─────────────────
+        case 'get-crm-assign-queue': {
+          const q = await readAssignQueue(env);
+          result = { ok: true, items: q.filter(x => x.status === 'pending') };
+          break;
+        }
+
+        // ── 사내 스크립트의 처리 결과 보고 (INGEST_TOKEN) ──────────────────
+        // 성공 → 'done'(최근 기록으로 7일 보관), 실패 → 3회까지 재시도 후 'failed'
+        case 'ack-crm-assign': {
+          if (!env.SETTINGS) throw Object.assign(new Error('KV(SETTINGS) 미설정'), { status: 501 });
+          const results = Array.isArray(body?.results) ? body.results : [];
+          const q = await readAssignQueue(env);
+          const now = new Date().toISOString();
+          for (const r of results) {
+            const it = q.find(x => x.ticketNo === r.ticketNo && x.status === 'pending' &&
+                                   (!r.requestedAt || x.requestedAt === r.requestedAt));
+            if (!it) continue;
+            if (r.ok) { it.status = 'done'; it.doneAt = now; it.error = null; }
+            else {
+              it.attempts = (it.attempts || 0) + 1;
+              it.error = String(r.error || '알 수 없는 오류').slice(0, 200);
+              if (it.attempts >= 3) it.status = 'failed';
+            }
+          }
+          const weekAgo = new Date(Date.now() - 7 * 864e5).toISOString();
+          const kept = q.filter(x => x.status !== 'done' || (x.doneAt || '') >= weekAgo);
+          await env.SETTINGS.put(CRM_ASSIGN_QUEUE_KEY, JSON.stringify(kept));
+          result = { ok: true, pending: kept.filter(x => x.status === 'pending').length };
           break;
         }
 
@@ -848,16 +902,25 @@ const CRM_TICKETS_KEY = 'crm-tickets';
 
 // CRM 티켓 목록 읽기 — 사내 동기화 스크립트가 넣어 둔 값을 그대로 돌려준다.
 // 동기화가 멈춰도 마지막 값은 남으므로, 얼마나 오래됐는지(ageHours)를 함께 알려 준다.
+// CRM 담당자 변경 요청 대기열 (KV)
+const CRM_ASSIGN_QUEUE_KEY = 'crm-assign-queue';
+async function readAssignQueue(env) {
+  if (!env.SETTINGS) return [];
+  try { const raw = await env.SETTINGS.get(CRM_ASSIGN_QUEUE_KEY); const v = raw ? JSON.parse(raw) : []; return Array.isArray(v) ? v : []; }
+  catch (e) { console.error('[crm-assign-queue] 읽기 실패:', e.message); return []; }
+}
+
 async function readCrmTickets(env) {
   if (!env.SETTINGS) return { ok: true, tickets: [], syncedAt: null, configured: false };
   try {
     const raw = await env.SETTINGS.get(CRM_TICKETS_KEY);
-    if (!raw) return { ok: true, tickets: [], syncedAt: null, configured: true };
+    const assignQueue = await readAssignQueue(env);   // 카드에 'CRM 변경 대기/실패' 표시용
+    if (!raw) return { ok: true, tickets: [], syncedAt: null, configured: true, assignQueue };
     const d = JSON.parse(raw);
     const ageHours = d.syncedAt
       ? Math.round((Date.now() - new Date(d.syncedAt).getTime()) / 36e5 * 10) / 10 : null;
     return { ok: true, tickets: d.tickets || [], syncedAt: d.syncedAt || null,
-             source: d.source || null, ageHours, configured: true };
+             source: d.source || null, ageHours, configured: true, assignQueue };
   } catch (e) {
     console.error('[crm-tickets] 읽기 실패:', e.message);
     return { ok: true, tickets: [], syncedAt: null, configured: true, error: '읽기 실패' };
@@ -878,6 +941,17 @@ async function readCrmTickets(env) {
 //  - 지난 날짜는 지우지 않는다(이력 보존). 티켓이 목록에서 빠져도(종료) 아무것도 지우지 않는다
 //  - 쓰기 횟수 상한(budget)을 둔다 — 남은 작업은 다음 실행에 이어서 한다(멱등)
 const CRM_AUTO_NOTE = 'CRM 담당자 자동 반영';
+
+// 배포지원요청 티켓이 처음 들어오는 '접수 담당자' — 이 사람이 담당이면 아직 배정 전으로 본다.
+// (CRM 설정상 기본 담당자가 이하영, 예전 접수 큐가 오정훈 상무)
+// ⚠️ 이하영은 배정 대상 멤버이기도 하다. 그래서 CRM 담당이 이하영이면 '자동 배정'하지 않고
+//    대시보드에서 실제로 배정한 기록(일정)이 있을 때만 배정된 것으로 본다.
+// 환경변수 CRM_QUEUE_OWNERS="이하영,오정훈" 으로 바꿀 수 있다. index.html 의 같은 목록과 맞출 것.
+const DEFAULT_CRM_QUEUE_OWNERS = ['이하영', '오정훈'];
+function crmQueueOwners(env) {
+  const v = String(env.CRM_QUEUE_OWNERS || '').split(',').map(s => s.trim()).filter(Boolean);
+  return new Set(v.length ? v : DEFAULT_CRM_QUEUE_OWNERS);
+}
 
 async function applyCrmAssignments(env, tickets, opts = {}) {
   const stat = { linked: 0, created: 0, moved: 0, extended: 0, removed: 0, mismatch: [], waiting: 0, noPeriod: 0, budgetHit: false };
@@ -925,9 +999,11 @@ async function applyCrmAssignments(env, tickets, opts = {}) {
     return true;
   };
 
+  const queueOwners = crmQueueOwners(env);
   for (const t of tickets) {
-    const memberId = nameToId.get(String(t.assignee || '').trim());
-    if (!memberId) { stat.waiting++; continue; }            // 접수 큐(오정훈)·명단 밖 → 아직 배정 전
+    const owner = String(t.assignee || '').trim();
+    const memberId = queueOwners.has(owner) ? null : nameToId.get(owner);
+    if (!memberId) { stat.waiting++; continue; }            // 접수 담당자(이하영·오정훈)·명단 밖 → 아직 배정 전
     if (!t.periodFrom) { stat.noPeriod++; continue; }        // 기간을 모르면 일정을 만들 수 없음
     if (stat.budgetHit) break;
     const from = t.periodFrom, to = t.periodTo && t.periodTo >= t.periodFrom ? t.periodTo : t.periodFrom;

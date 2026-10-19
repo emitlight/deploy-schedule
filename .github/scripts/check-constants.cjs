@@ -14,6 +14,7 @@ const get = (src, name) => {
 const pairs = [
   ['AVAIL_OUT_KEYWORDS', 'OUT_KEYWORDS'],         // 부재 키워드
   ['AVAILABLE_KEYWORDS', 'AVAILABLE_KEYWORDS'],   // 가능 키워드
+  ['DEFAULT_CRM_QUEUE_OWNERS', 'CRM_QUEUE_OWNERS'], // CRM 접수 담당자(= 아직 배정 전)
 ];
 
 let bad = false;
@@ -32,4 +33,4 @@ for (const [wn, hn] of pairs) {
   }
 }
 if (bad) process.exit(1);
-console.log('✅ 판정 상수 일치 (부재·가능 키워드)');
+console.log('✅ 서버·화면 공통 상수 일치 (부재·가능 키워드, CRM 접수 담당자)');
