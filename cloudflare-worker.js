@@ -194,7 +194,18 @@ export default {
                             source: String(body.source || 'partnercenter').slice(0, 40) };
           await env.SETTINGS.put(CRM_TICKETS_KEY, JSON.stringify(payload));
           console.log(`[crm-tickets] ${clean.length}건 적재 (from ${payload.source})`);
-          result = { ok: true, stored: clean.length, syncedAt: payload.syncedAt };
+          // 담당자가 정해진 티켓은 대시보드 배정으로 곧바로 반영 (실패해도 티켓 적재는 유지)
+          let assignments;
+          try { assignments = await applyCrmAssignments(env, clean, { maxWrites: 40 }); }
+          catch (e) { console.error('[crm-assign] 실패:', e.message); assignments = { ok: false, error: e.message }; }
+          result = { ok: true, stored: clean.length, syncedAt: payload.syncedAt, assignments };
+          break;
+        }
+
+        // ── CRM 담당자 → 배정 반영 수동 실행 (관리용) ───────────────────
+        case 'apply-crm-assignments': {
+          const cur = await readCrmTickets(env);
+          result = await applyCrmAssignments(env, cur.tickets || [], { maxWrites: 40 });
           break;
         }
 
@@ -501,6 +512,12 @@ export default {
   async scheduled(event, env, ctx) {
     // 결과를 로그로 남긴다 — 과거엔 실패해도 아무 흔적이 없어 Cron이 멈춘 걸 아무도 몰랐다.
     ctx.waitUntil((async () => {
+      // CRM 담당자 반영을 먼저(작은 쓰기 상한) — 남은 건 다음 실행에서 이어서 한다
+      try {
+        const cur = await readCrmTickets(env);
+        const a = await applyCrmAssignments(env, cur.tickets || [], { maxWrites: 15 });
+        console.log('[cron] CRM 배정 반영:', JSON.stringify(a));
+      } catch (e) { console.error('[cron] CRM 배정 반영 실패:', e.message); }
       const r = await runScheduledSync(env);
       if (!r || !r.ok) console.error('[cron] 동기화 실패/부분실패:', JSON.stringify(r));
       else             console.log('[cron] 동기화 정상:', JSON.stringify(r));
@@ -847,6 +864,142 @@ async function readCrmTickets(env) {
   }
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// CRM 담당자 → 대시보드 배정 자동 반영
+// ════════════════════════════════════════════════════════════════════════
+// CRM이 '누가 맡았는가'의 원천이다. 배포지원요청 티켓은 접수 큐(오정훈 상무)로 들어왔다가
+// 담당 엔지니어에게 재할당된다. 따라서 티켓 담당자가 명단 멤버이면 '배정 완료'로 보고,
+// 요청 기간의 평일마다 배포지원 일정을 만들어 가용 판정·달력·통계에 그대로 반영한다.
+//
+// 원칙
+//  - 이미 같은 사람에게 수동 등록돼 있으면(티켓번호 없음) 티켓번호만 연결 — 중복 생성 안 함
+//  - 자동으로 만든 일정(노트가 CRM_AUTO_NOTE로 시작)은 CRM 변경(담당자·기간)을 따라간다
+//  - 사람이 등록한 일정은 덮어쓰지 않는다 — 담당자가 다르면 '불일치'로만 보고한다
+//  - 지난 날짜는 지우지 않는다(이력 보존). 티켓이 목록에서 빠져도(종료) 아무것도 지우지 않는다
+//  - 쓰기 횟수 상한(budget)을 둔다 — 남은 작업은 다음 실행에 이어서 한다(멱등)
+const CRM_AUTO_NOTE = 'CRM 담당자 자동 반영';
+
+async function applyCrmAssignments(env, tickets, opts = {}) {
+  const stat = { linked: 0, created: 0, moved: 0, extended: 0, removed: 0, mismatch: [], waiting: 0, noPeriod: 0, budgetHit: false };
+  if (!env.NOTION_SECRET || !env.SCHEDULES_DB_ID || !env.SPINLOG_DB_ID) return { ok: false, reason: 'env', ...stat };
+  if (!Array.isArray(tickets) || tickets.length === 0) return { ok: true, ...stat };
+
+  let budget = opts.maxWrites ?? 40;
+  const spend = () => { if (budget <= 0) { stat.budgetHit = true; return false; } budget--; return true; };
+
+  // CRM 배정은 사실이므로 '추가 인원' 설정과 무관하게 전원 명단으로 매칭한다
+  const nameToId = new Map(buildRoster(env, true).map(m => [m.name, m.id]));
+  const idToName = new Map([...nameToId].map(([n, i]) => [i, n]));
+  const kstToday = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+
+  await ensureSpinLogProp(env);   // '스핀로그ID'·'티켓번호' 속성 보장
+  // 이 시스템이 만든 배포 일정 전체 (1회 조회)
+  const pages = [];
+  let cursor;
+  for (let i = 0; i < 20; i++) {
+    const payload = { page_size: 100, filter: { and: [
+      { property: '타입', select: { equals: 'deploy' } },
+      { property: '아웃룩여부', checkbox: { equals: false } },
+    ] } };
+    if (cursor) payload.start_cursor = cursor;
+    const d = await (await notion(env, 'POST', `/databases/${env.SCHEDULES_DB_ID}/query`, payload)).json();
+    pages.push(...(d.results || []));
+    if (!d.has_more || !d.next_cursor) break;
+    cursor = d.next_cursor;
+  }
+  const deploys = pages.map(parseNotionSchedule).filter(Boolean);
+  const isAuto = e => String(e.note || '').startsWith(CRM_AUTO_NOTE);
+
+  const createDay = async (t, memberId, date, spinId) => {
+    if (!spend()) return false;
+    const ev = { memberId, date, type: 'deploy', startTime: '09:00', endTime: '18:00',
+      title: `${t.account ? t.account + ' ' : ''}배포지원`, note: `${CRM_AUTO_NOTE} · ${t.ticketNo}`,
+      fromOutlook: false, isAllDay: false, outlookId: `crm_${t.ticketNo}_${date}`,
+      ticketNo: t.ticketNo, spinLogPageId: spinId || '' };
+    await notion(env, 'POST', '/pages', { parent: { database_id: env.SCHEDULES_DB_ID }, properties: notionScheduleProps(ev) });
+    return true;
+  };
+  const archive = async e => {
+    if (!spend()) return false;
+    await notion(env, 'PATCH', `/pages/${e.pageId}`, { archived: true });
+    return true;
+  };
+
+  for (const t of tickets) {
+    const memberId = nameToId.get(String(t.assignee || '').trim());
+    if (!memberId) { stat.waiting++; continue; }            // 접수 큐(오정훈)·명단 밖 → 아직 배정 전
+    if (!t.periodFrom) { stat.noPeriod++; continue; }        // 기간을 모르면 일정을 만들 수 없음
+    if (stat.budgetHit) break;
+    const from = t.periodFrom, to = t.periodTo && t.periodTo >= t.periodFrom ? t.periodTo : t.periodFrom;
+    const wanted = weekdayRange(from, to);
+    const mine = deploys.filter(e => e.ticketNo === t.ticketNo);
+
+    if (mine.length) {
+      const owners = [...new Set(mine.map(e => e.memberId))];
+      if (owners.length === 1 && owners[0] === memberId) {
+        // 이미 같은 사람 — 자동 생성분만 기간 변경을 따라간다
+        const auto = mine.filter(isAuto);
+        if (auto.length === mine.length) {
+          const have = new Set(auto.map(e => e.date));
+          for (const d of wanted) if (!have.has(d)) { if (!await createDay(t, memberId, d, null)) break; stat.extended++; }
+          for (const e of auto) if (!wanted.includes(e.date) && e.date >= kstToday && !e.spinLogPageId) {
+            if (!await archive(e)) break; stat.removed++;
+          }
+        }
+        continue;
+      }
+      // 다른 사람에게 배정돼 있음
+      if (!mine.every(isAuto)) {                             // 사람이 등록한 배정은 덮어쓰지 않는다
+        stat.mismatch.push({ ticketNo: t.ticketNo, crm: t.assignee,
+          dashboard: owners.map(id => idToName.get(id) || `#${id}`) });
+        continue;
+      }
+      // 자동 생성분 → CRM을 따라 새 담당자로 옮긴다 (지난 날짜는 이력으로 남김)
+      for (const e of mine) if (e.date >= kstToday) { if (!await archive(e)) break; }
+      for (const sp of [...new Set(mine.map(e => e.spinLogPageId).filter(Boolean))]) {
+        if (!spend()) break;
+        const oldName = idToName.get(mine[0].memberId) || '';
+        await notion(env, 'PATCH', `/pages/${sp}`, { properties: mapSpinProps({
+          'NAME': { title: [{ text: { content: `[취소] ${oldName}` } }] }, 'MEMBERID': { number: null } }) });
+      }
+      if (stat.budgetHit) break;
+      stat.moved++;
+    } else {
+      // 티켓번호 없이 같은 사람에게 수동 등록된 일정이 기간 안에 있으면 연결만 한다
+      const manual = deploys.filter(e => !e.ticketNo && e.memberId === memberId && e.date >= from && e.date <= to);
+      if (manual.length) {
+        for (const e of manual) {
+          if (!spend()) break;
+          await notion(env, 'PATCH', `/pages/${e.pageId}`, { properties: { '티켓번호': { rich_text: [{ text: { content: t.ticketNo } }] } } });
+          e.ticketNo = t.ticketNo;
+        }
+        if (!stat.budgetHit) stat.linked++;
+        continue;
+      }
+    }
+
+    // 새로 만든다: 배정 기록 1건(통계·이력용) + 기간 평일마다 일정 1건(첫날에 기록 연결)
+    if (wanted.length === 0) continue;
+    if (budget < wanted.length + 1) { stat.budgetHit = true; break; }   // 반쪽 생성 대신 다음 실행으로
+    spend();
+    const spin = await (await notion(env, 'POST', '/pages', { parent: { database_id: env.SPINLOG_DB_ID },
+      properties: mapSpinProps({
+        'NAME':     { title: [{ text: { content: idToName.get(memberId) || t.assignee } }] },
+        'DATE':     { date: { start: from } },
+        'SPUNAT':   { rich_text: [{ text: { content: `CRM 담당자 지정 · ${t.ticketNo} · 기간 ${from}~${to}` } }] },
+        'MEMBERID': { number: memberId },
+      }) })).json();
+    let first = true;
+    for (const d of wanted) {
+      if (!await createDay(t, memberId, d, first ? spin.id : null)) break;
+      first = false;
+    }
+    stat.created++;
+  }
+  console.log('[crm-assign]', JSON.stringify(stat));
+  return { ok: true, ...stat };
+}
+
 async function readSettings(env) {
   const fallback = { includeExtra: String(env.INCLUDE_EXTRA ?? '0') === '1' };
   if (!env.SETTINGS) return { ...fallback, editable: false, source: 'env' };
@@ -955,6 +1108,7 @@ async function annotateSpinLogs(env, logs) {
       log.confirmedRange = dates[0] === dates[dates.length - 1]
         ? dates[0] : `${dates[0]}~${dates[dates.length - 1]}`;
       log.eventTitle     = matched[0].title || '';
+      log.ticketNo       = (matched.find(e => e.ticketNo) || {}).ticketNo || null;
     } else {
       log.confirmed = false;
     }
@@ -1007,21 +1161,33 @@ async function buildStats(env, { from, to } = {}) {
 
   const byId = {};
   valid.forEach(l => {
-    const s = byId[l.memberId] = byId[l.memberId] || { count:0, last:null, dates:[] };
+    const s = byId[l.memberId] = byId[l.memberId] || { count:0, last:null, dates:[], items:[] };
     s.count++;
     s.dates.push(l.targetDate || l.createdTime.slice(0,10));
     if (!s.last || l.createdTime > s.last) s.last = l.createdTime;
+    // 통계에서 멤버를 누르면 보여줄 '어떤 건에 배정됐는가' 목록
+    const spun = String(l.spunAt || '');
+    const periodM = spun.match(/기간\s+(\d{4}-\d{2}-\d{2})\s*~\s*(\d{4}-\d{2}-\d{2})/);
+    s.items.push({
+      period:   l.confirmedRange || (periodM ? `${periodM[1]}~${periodM[2]}` : (l.targetDate || '')),
+      days:     l.confirmedDays || null,
+      title:    l.eventTitle || '',
+      ticketNo: l.ticketNo || (spun.match(/\b(TT\d+)\b/) || [])[1] || null,
+      source:   spun.startsWith('CRM 담당자 지정') ? 'CRM' : (spun.startsWith('복원 배정') ? '복원' : '대시보드'),
+      recordedAt: l.createdTime.slice(0,10),
+    });
   });
 
   const total = valid.length;
   const members = roster.map(m => {
-    const s = byId[m.id] || { count:0, last:null, dates:[] };
+    const s = byId[m.id] || { count:0, last:null, dates:[], items:[] };
     return {
       id:m.id, name:m.name, extra:m.extra,
       count:s.count,
       share: total ? Math.round(s.count / total * 1000) / 10 : 0,   // 비율(%) 소수 1자리
       lastAssigned: s.last ? s.last.slice(0,10) : null,
       dates: s.dates.sort(),
+      items: s.items.sort((a, b) => (b.period || '').localeCompare(a.period || '')),   // 최근 배정 먼저
     };
   }).sort((a,b) => b.count - a.count || a.name.localeCompare(b.name,'ko'));
 
@@ -1172,8 +1338,21 @@ async function getCalendarEvents(token,email,startDate,endDate) {
   let url=`${GRAPH_BASE}/users/${email}/calendarView?${params}`;
   const all=[];
   for (let page=0; url && page<40; page++) {   // 최대 1만 건 가드 (무한 루프 방지)
-    const res=await fetch(url,
-      {headers:{'Authorization':`Bearer ${token}`,'Prefer':'outlook.timezone="Korea Standard Time"'}});
+    // 일시적 오류(요청 과다 429, 서버 5xx, 네트워크)는 자동 재시도 — 한 번 실패로
+    // 그 사람이 '조회 실패 → 후보 제외'되지 않게 한다. 권한 오류(401/403/404)는 재시도해도 같으므로 바로 실패.
+    let res;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        res = await fetch(url,
+          {headers:{'Authorization':`Bearer ${token}`,'Prefer':'outlook.timezone="Korea Standard Time"'}});
+      } catch (netErr) {
+        if (attempt >= 2) throw new Error(`네트워크 오류: ${netErr.message}`);
+        await sleep(500 * 2 ** attempt); continue;
+      }
+      if (res.ok || attempt >= 2 || !(res.status === 429 || res.status >= 500)) break;
+      const ra = Number(res.headers.get('Retry-After'));
+      await sleep(ra > 0 ? Math.min(ra, 5) * 1000 : 500 * 2 ** attempt);
+    }
     if (!res.ok){const e=await res.json().catch(()=>({}));
       throw new Error(e?.error?.message||`HTTP ${res.status}`);}
     const data=await res.json();

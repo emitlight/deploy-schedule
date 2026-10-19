@@ -1001,6 +1001,27 @@
   .guide-modal-body pre code { color: var(--ink); }
   .guide-modal-body blockquote { border-left-color: var(--rule); background: var(--paper); color: var(--graphite); }
 
+  /* 배정 통계 — 멤버를 누르면 배정 내역 */
+  .stat-row { cursor: pointer; }
+  .stat-row:hover td { background: var(--paper); }
+  .stat-row:focus-visible { outline: 2px solid var(--cobalt); outline-offset: -2px; }
+  .stat-caret { display: inline-block; width: 10px; color: var(--mute); font-size: 10px; }
+  .stat-detail td { padding: 0 8px 8px 26px; }
+  .stat-items { list-style: none; margin: 0; padding: 6px 0 2px; border-left: 2px solid var(--rule); }
+  .stat-items li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; padding: 3px 0 3px 10px; font-size: 12px; }
+  .si-period { color: var(--ink); font-weight: 600; white-space: nowrap; }
+  .si-days { color: var(--mute); font-weight: 400; }
+  .si-what { color: var(--graphite); }
+  .si-ticket a, .si-ticket { color: var(--cobalt); font-size: 11px; }
+  .si-src { font-size: 10px; border-radius: 999px; padding: 0 6px; border: 1px solid var(--rule); color: var(--graphite); }
+  .si-src-crm  { background: var(--cobalt-tint); border-color: #CDD3EC; color: var(--cobalt); }
+  .si-src-wait { background: var(--caution-tint); border-color: #F2D9AE; color: var(--caution); }
+  .stat-items-empty { font-size: 12px; color: var(--mute); padding: 6px 0 2px 10px; border-left: 2px solid var(--rule); }
+
+  /* 요청 티켓 — CRM 담당자 상태 */
+  .ct-badge.crm      { background: var(--cobalt-tint); color: var(--cobalt); border-color: #CDD3EC; }
+  .ct-badge.mismatch { background: var(--stop-tint); color: var(--stop); border-color: #F3C4BE; }
+
   @media (max-width: 900px) {
     .crm-tickets { padding: 0 12px; }
     .summary-bar { gap: 16px; }
@@ -2439,7 +2460,14 @@ function ticketAssignment(ticketNo) {
   const dates = rows.map(e => e.date).sort();
   const m = ALL().find(x => x.id === rows[0].memberId);
   return { name: m ? m.name : `#${rows[0].memberId}`, from: dates[0], to: dates[dates.length - 1],
-           days: dates.length };
+           days: dates.length,
+           auto: rows.every(e => String(e.note || '').startsWith('CRM 담당자 자동 반영')) };   // 서버가 CRM 담당자로 자동 등록한 건
+}
+
+// CRM 티켓 담당자가 명단 멤버인가 (접수 큐 담당 '오정훈 상무'·명단 밖이면 아직 배정 전)
+function crmAssigneeMember(t) {
+  const n = String(t && t.assignee || '').trim();
+  return n ? (ALL().find(m => m.name === n) || null) : null;
 }
 
 function renderCrmTickets() {
@@ -2464,13 +2492,20 @@ function renderCrmTickets() {
 
   const cards = crmTickets.map(t => {
     const a = ticketAssignment(t.ticketNo);
+    const crm = crmAssigneeMember(t);
+    const mismatch = a && crm && a.name !== crm.name;
     const period = t.periodFrom
       ? `${t.periodFrom}${t.periodTo ? ` ~ ${t.periodTo}` : ''}`
       : '<span style="color:#b0b7c9;">본문에 기재 없음</span>';
-    const badge = a
-      ? `<span class="ct-badge done">${esc(a.name)} 배정됨</span>`
-      : `<span class="ct-badge wait">배정 필요</span>`;
-    return `<div class="ct-card ${a ? 'assigned' : ''}">
+    // 상태: 대시보드 배정과 CRM 담당자를 함께 본다 (CRM이 원천 — 서버가 담당자를 자동 반영)
+    const badge = mismatch
+      ? `<span class="ct-badge mismatch" title="대시보드 배정과 CRM 담당자가 다릅니다. 어느 쪽이 맞는지 확인해 주세요.">담당 불일치 · CRM ${esc(crm.name)} / 대시보드 ${esc(a.name)}</span>`
+      : a
+        ? `<span class="ct-badge done">${esc(a.name)} 배정됨${a.auto ? ' · CRM 연동' : ''}</span>`
+        : crm
+          ? `<span class="ct-badge crm" title="CRM에서 담당자가 지정됐습니다. 다음 동기화 때 배포지원 일정이 자동 등록됩니다.">CRM 담당 ${esc(crm.name)} · 자동 반영 대기</span>`
+          : `<span class="ct-badge wait">배정 필요</span>`;
+    return `<div class="ct-card ${a && !mismatch ? 'assigned' : ''}${mismatch ? ' urgent' : ''}">
       <div>
         ${t.url ? `<a class="ct-no" href="${esc(t.url)}" target="_blank" rel="noopener">${esc(t.ticketNo)}</a>`
                 : `<span class="ct-no">${esc(t.ticketNo)}</span>`}
@@ -2486,7 +2521,9 @@ function renderCrmTickets() {
       <div class="ct-actions">
         ${a
           ? `<span class="ct-meta">${esc(a.from)} ~ ${esc(a.to)} (${a.days}일)</span>`
-          : `<button class="ct-btn primary" onclick="assignFromTicket(${jsArg(t.ticketNo)})">이 티켓으로 배정</button>`}
+          : crm
+            ? `<span class="ct-meta">CRM에서 담당자가 정해져 돌림판이 필요 없습니다</span>`
+            : `<button class="ct-btn primary" onclick="assignFromTicket(${jsArg(t.ticketNo)})">이 티켓으로 배정</button>`}
       </div>
     </div>`;
   }).join('');
@@ -3562,12 +3599,19 @@ async function loadStats() {
   catch (e) { box.innerHTML = `<p class="rr-info">통계를 불러오지 못했습니다 — ${escHtml(e.message || e)}</p>`; return; }
   if (!s || !s.ok) { box.innerHTML = '<p class="rr-info">통계를 불러오지 못했습니다</p>'; return; }
 
-  const esc = x => String(x).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const esc = escHtml;
+  // 멤버별 '어떤 건에 배정됐는가' — 서버가 items를 주면 그대로, 아니면 이력에서 직접 만든다
+  if (s.members.some(m => !Array.isArray(m.items))) {
+    if (!(notionSpinLog || []).length) await loadRrOrderFromNotion();
+  }
   const max = Math.max(1, s.fairness.max);
   const rows = s.members.map(m => {
     const w = Math.round(m.count / max * 100);
-    return `<tr>
-      <td style="padding:5px 8px;white-space:nowrap;font-weight:600;color:#1C2433;">${esc(m.name)}${m.extra ? ' <span style="font-weight:400;color:#999;font-size:10px;">추가</span>' : ''}</td>
+    const items = Array.isArray(m.items) ? m.items : statItemsFromLog(m.id, from, to, s.unconfirmed === undefined);
+    return `<tr class="stat-row" role="button" tabindex="0" aria-expanded="false"
+        onclick="toggleStatDetail(${m.id}, this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleStatDetail(${m.id}, this)}"
+        title="눌러서 배정 내역 보기">
+      <td style="padding:5px 8px;white-space:nowrap;font-weight:600;color:#1C2433;"><span class="stat-caret">▸</span> ${esc(m.name)}${m.extra ? ' <span style="font-weight:400;color:#999;font-size:10px;">추가</span>' : ''}</td>
       <td style="padding:5px 8px;width:100%;">
         <div style="background:#ECEFF4;border-radius:4px;height:12px;position:relative;">
           <div style="background:${m.count === 0 ? '#E8B4AE' : '#2B3A8C'};width:${w}%;height:100%;border-radius:4px;"></div>
@@ -3576,6 +3620,9 @@ async function loadStats() {
       <td style="padding:5px 8px;text-align:right;white-space:nowrap;font-weight:700;">${m.count}회</td>
       <td style="padding:5px 8px;text-align:right;white-space:nowrap;color:#777;">${m.share}%</td>
       <td style="padding:5px 8px;text-align:right;white-space:nowrap;color:#999;font-size:11px;">${m.lastAssigned || '—'}</td>
+    </tr>
+    <tr id="statDetail-${m.id}" class="stat-detail" style="display:none;">
+      <td colspan="5">${renderStatItems(items)}</td>
     </tr>`;
   }).join('');
 
@@ -3601,9 +3648,67 @@ async function loadStats() {
       <tbody>${rows}</tbody>
     </table>
     <p class="rr-info" style="margin-top:8px;font-size:10px;">
-      ※ 가용 인원 중 동일 확률 추첨이므로 단기간에는 편차가 생길 수 있습니다.
-      기간을 넓게 볼수록 평균에 수렴합니다.
+      ※ 멤버를 누르면 어떤 건에 배정됐는지 볼 수 있습니다.
+      가용 인원 중 동일 확률 추첨이므로 단기간에는 편차가 생길 수 있고, 기간을 넓게 볼수록 평균에 수렴합니다.
     </p>`;
+}
+
+// 통계 행을 누르면 그 멤버의 배정 내역을 펼치고 접는다
+function toggleStatDetail(memberId, rowEl) {
+  const d = document.getElementById(`statDetail-${memberId}`);
+  if (!d) return;
+  const open = d.style.display === 'none';
+  d.style.display = open ? '' : 'none';
+  if (rowEl) {
+    rowEl.setAttribute('aria-expanded', open ? 'true' : 'false');
+    const c = rowEl.querySelector && rowEl.querySelector('.stat-caret');
+    if (c) c.textContent = open ? '▾' : '▸';
+  }
+}
+
+// 서버가 내역(items)을 주지 않는 경우(구버전 서버) 공유 이력에서 직접 만든다.
+// includeUnconfirmed=true 면 '추첨만 됨'도 포함한다 — 구버전 서버의 횟수 집계와 맞추기 위해.
+function statItemsFromLog(memberId, from, to, includeUnconfirmed) {
+  const inRange = l => { const d = String(l.createdTime || '').slice(0, 10);
+    return (!from || d >= from) && (!to || d <= to); };
+  return (notionSpinLog || [])
+    .filter(l => l.memberId === memberId && inRange(l) && (includeUnconfirmed || l.confirmed !== false))
+    .map(l => {
+      const spun = String(l.spunAt || '');
+      const pm = spun.match(/기간\s+(\d{4}-\d{2}-\d{2})\s*~\s*(\d{4}-\d{2}-\d{2})/);
+      const period = l.confirmedRange || (pm ? `${pm[1]}~${pm[2]}` : (l.targetDate || ''));
+      const [pf, pt] = period.split('~');
+      const linked = events.find(e => e.type === 'deploy' && !e.fromOutlook && e.ticketNo &&
+        (e.spinLogPageId === l.id || (e.memberId === memberId && e.date >= pf && e.date <= (pt || pf))));
+      return {
+        period, days: l.confirmedDays || null, title: l.eventTitle || '',
+        ticketNo: l.ticketNo || (linked && linked.ticketNo) || (spun.match(/\b(TT\d+)\b/) || [])[1] || null,
+        source: spun.startsWith('CRM 담당자 지정') ? 'CRM' : (spun.startsWith('복원 배정') ? '복원' : '대시보드'),
+        recordedAt: String(l.createdTime || '').slice(0, 10),
+        unconfirmed: l.confirmed === false,
+      };
+    })
+    .sort((a, b) => (b.period || '').localeCompare(a.period || ''));
+}
+
+function renderStatItems(items) {
+  if (!items || items.length === 0)
+    return `<div class="stat-items-empty">이 기간에 배정된 건이 없습니다.</div>`;
+  const fmt = p => String(p || '').replace(/(\d{4})-(\d{2})-(\d{2})/g, '$2/$3');
+  return `<ul class="stat-items">${items.map(it => {
+    const t = it.ticketNo ? crmTickets.find(x => x.ticketNo === it.ticketNo) : null;
+    const ticket = it.ticketNo
+      ? (t && t.url ? `<a href="${escHtml(t.url)}" target="_blank" rel="noopener">${escHtml(it.ticketNo)}</a>` : escHtml(it.ticketNo))
+      : '';
+    const what = [t && t.account, it.title].filter(Boolean).map(escHtml).join(' · ') || '배포지원';
+    return `<li>
+      <span class="si-period">${escHtml(fmt(it.period))}${it.days > 1 ? ` <span class="si-days">${it.days}일</span>` : ''}</span>
+      <span class="si-what">${what}</span>
+      ${ticket ? `<span class="si-ticket">${ticket}</span>` : ''}
+      <span class="si-src si-src-${it.source === 'CRM' ? 'crm' : 'dash'}">${escHtml(it.source)}</span>
+      ${it.unconfirmed ? '<span class="si-src si-src-wait">추첨만 됨</span>' : ''}
+    </li>`;
+  }).join('')}</ul>`;
 }
 
 function assignFromWheel() {

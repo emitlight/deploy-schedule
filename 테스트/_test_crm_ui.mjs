@@ -20,7 +20,7 @@ process.on('uncaughtException',e=>{console.error('UNCAUGHT:',short(e.message));p
 
 const TICKET={ticketId:'1796791',ticketNo:'TT125192',
  title:'배포관리요청서_1-25080435_KB국민은행_문서암호화솔루션_업그레이드구매_061012',
- status:'담당할당',assignee:'김정환',account:'KB국민은행',requester:'이광진',
+ status:'담당할당',assignee:'오정훈',account:'KB국민은행',requester:'이광진',   // 접수 큐(오정훈 상무) = 아직 배정 전
  projectCode:'1-25080435',periodFrom:'2026-10-19',periodTo:'2026-11-16',
  createdKst:'2026-10-13',url:'https://crm.softcamp.co.kr/index.php?module=HelpDesk&action=DetailView&record=1796791'};
 globalThis.fetch=async(u,init)=>{
