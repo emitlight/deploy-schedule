@@ -253,6 +253,8 @@ CI 배포(`deploy-worker.yml`)는 수동 실행 전용. 켜려면 GitHub Secrets
 
 **접속 시 자동 동기화 (2026-10-26)**: 대시보드를 열면 '동기화' 버튼과 같이 동작한다 (`autoSyncOnOpen`).
 화면은 매번 Notion + 아웃룩 직접 조회로 최신화, 서버 사본 저장(`run-sync`)은 PC당 30분에 1회만(`lastAutoRunSync`).
+첫 조회 실패·일부 인원 실패 시 1.5초/4초 뒤 자동 재시도, 실패한 인원은 기존 사본 유지.
+**조회 범위**: 처음 열 때 '이번 주 3주 전 ~ 오늘+90일'. 주를 옮기면 그 주 앞뒤 3주(`PREFETCH_DAYS`)가 없을 때만 아웃룩을 추가 조회(`prefetchAroundWeek` → `ensureOutlookCoverage`). 멀리 떨어진 날짜로 이동하면 그 구간만 조회.
 실패 시 로그에 남는다 — `npx wrangler tail deploycalendar` 또는 대시보드 Logs.
 
 ---
