@@ -1,6 +1,8 @@
 # Cloudflare Worker 자동 배포
 #
-# 동작: main 브랜치에 cloudflare-worker.js 또는 wrangler.toml 이 변경되면 자동 배포.
+# 동작: 수동 실행 전용 (2026-10-26 운영자 결정 — GitHub Secrets 연동은 하지 않음).
+#       평소 배포는 프로젝트 폴더의 '배포하기.bat' 더블클릭.
+#       자동 배포를 켜려면 아래 Secrets 를 등록한 뒤 on: 에 push 트리거를 되살릴 것.
 #
 # ⚠️ 사전 설정 (1회):
 #   GitHub 저장소 → Settings → Secrets and variables → Actions → New repository secret
@@ -15,13 +17,7 @@
 name: Deploy Worker
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'cloudflare-worker.js'
-      - 'wrangler.toml'
-      - '.github/workflows/deploy-worker.yml'
-  workflow_dispatch:   # 수동 실행 허용
+  workflow_dispatch:   # 수동 실행만 (Secrets 미등록 상태에서 push 마다 실패 표시가 뜨지 않도록)
 
 concurrency:
   group: deploy-worker

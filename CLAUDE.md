@@ -202,13 +202,13 @@ VTIGER_URL / VTIGER_USERNAME / VTIGER_ACCESS_KEY(⭐) / VTIGER_MEMBER_IDS
 | 대상 | 방법 |
 |------|------|
 | 대시보드 | `git push origin main` → GitHub Pages 자동 (1~2분) |
-| Worker | CI 자동 (`cloudflare-worker.js`/`wrangler.toml` 변경 시). 수동은 **`배포하기.bat` 더블클릭** (= `node tools/deploy.mjs`: 테스트 → 로그인 확인 → `wrangler deploy --keep-vars` → 응답 확인 → 선택적으로 사내 서버 스크립트 갱신). 안내: `tools/배포_자동화_안내.md` |
+| Worker | **`배포하기.bat` 더블클릭** (GitHub CI 배포는 운영자 결정으로 미사용 — 수동 실행 전용) (= `node tools/deploy.mjs`: 테스트 → 로그인 확인 → `wrangler deploy --keep-vars` → 응답 확인 → 선택적으로 사내 서버 스크립트 갱신). 안내: `tools/배포_자동화_안내.md` |
 | 안내 영상 | `media/guide.mp4` + `media/guide-poster.jpg` — 첫 방문 시 팝업 자동 재생(하루 1회, '다시 보지 않기'·끝까지 시청 시 중단). 영상 교체 시 `index.html` 의 `INTRO_VIDEO_VER` 를 올릴 것. 원본 제작: `보고서/영상/_제작파일/` (음성 edge-tts `ko-KR-SunHiNeural`) |
 
 > ⚠️ **`--keep-vars` 필수.** `wrangler.toml`에 활성 `[vars]` 블록이 없어서,
 > 이 옵션 없이 배포하면 대시보드 환경변수가 전부 삭제되고 Cron이 조용히 멈춘다.
 
-CI 사전 설정: GitHub Secrets에 `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` 등록 필요.
+CI 배포(`deploy-worker.yml`)는 수동 실행 전용. 켜려면 GitHub Secrets에 `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` 등록 후 push 트리거 복원.
 
 ---
 
