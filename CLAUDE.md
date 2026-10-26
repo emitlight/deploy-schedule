@@ -250,6 +250,9 @@ CI 배포(`deploy-worker.yml`)는 수동 실행 전용. 켜려면 GitHub Secrets
 | `0 6 * * *` | 15:00 |
 
 동기화 창: **과거 28일 ~ 미래 90일** (화면 표시 범위와 일치).
+
+**접속 시 자동 동기화 (2026-10-26)**: 대시보드를 열면 '동기화' 버튼과 같이 동작한다 (`autoSyncOnOpen`).
+화면은 매번 Notion + 아웃룩 직접 조회로 최신화, 서버 사본 저장(`run-sync`)은 PC당 30분에 1회만(`lastAutoRunSync`).
 실패 시 로그에 남는다 — `npx wrangler tail deploycalendar` 또는 대시보드 Logs.
 
 ---

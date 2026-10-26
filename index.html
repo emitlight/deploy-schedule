@@ -2444,12 +2444,13 @@ async function ensureOutlookCoverage(start, end) {
 // 앱 시작 시: 서버 멤버 명단 + 오늘 -7일 ~ +3개월 공유 데이터 로드
 async function loadEventsFromNotion() {
   const today = fmtDate(new Date());
-  await Promise.all([
+  const [, , shared] = await Promise.all([
     loadServerRoster(),
     loadCrmTickets(),
     refreshSharedData(addDaysStr(today, -7), addDaysStr(today, SYNC_AHEAD_DAYS), { silent: true }),
   ]);
   renderCrmTickets();   // 일정이 로드된 뒤 '배정됨' 표시를 다시 계산
+  return shared;
 }
 
 // ── CRM 배포지원요청 티켓 ────────────────────────────────────────────────
@@ -2693,11 +2694,39 @@ document.addEventListener('DOMContentLoaded', () => {
     btn.title = `마지막 동기화: ${lastSyncTime}`;
   }
   updateExtraBtn();
-  // Notion에서 최신 이벤트 로드 (Worker 설정된 경우)
-  if (WORKER_URL) {
-    loadEventsFromNotion();
-  }
+  // 접속하면 '동기화' 버튼을 누른 것과 같이 동작한다
+  if (WORKER_URL) autoSyncOnOpen();
 });
+
+// ── 접속 시 자동 동기화 (2026-10-26) ──────────────────────────────────────
+//  - 화면: 열 때마다 Notion(공유 원본) + 아웃룩 직접 조회로 최신화
+//  - 서버 사본(Notion) 저장(run-sync): 이 PC에서 30분 안에 이미 했으면 생략
+//    → 여러 명이 자주 열어도 아웃룩·Notion 호출이 몰리지 않게 한다
+const AUTO_RUN_SYNC_MIN = 30;
+async function autoSyncOnOpen() {
+  const btn = document.getElementById('syncBtn');
+  btn.classList.add('syncing');
+  btn.textContent = '동기화 중…';
+  try {
+    const r = await loadEventsFromNotion();
+    if (r && r.outlook) {
+      lastSyncTime = new Date().toLocaleString('ko-KR');
+      localStorage.setItem('lastSyncTime', lastSyncTime);
+      btn.title = `마지막 동기화: ${lastSyncTime} (접속 시 자동)`;
+    }
+  } catch (e) {
+    console.error('접속 시 동기화 실패', e);
+  } finally {
+    btn.classList.remove('syncing');
+    btn.textContent = '동기화';
+  }
+  let last = 0;
+  try { last = Number(localStorage.getItem('lastAutoRunSync')) || 0; } catch (_) {}
+  if (Date.now() - last > AUTO_RUN_SYNC_MIN * 60000) {
+    try { localStorage.setItem('lastAutoRunSync', String(Date.now())); } catch (_) {}
+    workerPost('run-sync').catch(() => {});   // 백그라운드 — 실패해도 화면에는 영향 없음
+  }
+}
 function showToast(msg) {
   const t = document.getElementById('toast');
   t.textContent = msg; t.classList.add('show');
