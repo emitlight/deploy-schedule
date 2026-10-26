@@ -8,6 +8,7 @@
  *  NOTION_SECRET, SCHEDULES_DB_ID, SPINLOG_DB_ID
  *  VTIGER_URL, VTIGER_USERNAME, VTIGER_ACCESS_KEY
  *  VTIGER_MEMBER_IDS  예: {"이송민":"19x5","이하영":"19x6",...}
+ *  TRUSTED_IPS    회사 공인 IP(쉼표 구분, 시크릿) — 이 주소에서는 비밀번호 없이 접속. 배포하기.bat 이 등록
  *
  * Cron Triggers (KST 기준, wrangler.toml 참고):
  *  0 22 * * *  → KST 07:00   아웃룩 자동 동기화
@@ -41,7 +42,10 @@ export default {
     // 사람(대시보드)은 APP_PASSWORD, 기계(사내 동기화 스크립트)는 INGEST_TOKEN.
     // 기계 토큰은 CRM 연동 동작만 할 수 있다(최소 권한) — 유출돼도 일정·이력을 건드릴 수 없다.
     //   티켓 적재 / CRM 담당자 변경 요청 가져가기 / 처리 결과 보고
-    const isUser    = safeEqual(auth, env.APP_PASSWORD);
+    // 회사 인터넷(TRUSTED_IPS)에서 온 요청은 비밀번호 없이 사람으로 인정한다 (2026-10-26 운영자 결정).
+    //   CF-Connecting-IP 는 Cloudflare 가 붙이는 값이라 외부에서 위조할 수 없다.
+    //   ⚠️ 보안 검토 필요: 같은 회사 주소로 나가는 손님용 와이파이가 있으면 방문객도 접근 가능.
+    const isUser    = safeEqual(auth, env.APP_PASSWORD) || isTrustedIp(request, env);
     const isIngest  = !!env.INGEST_TOKEN && safeEqual(auth, env.INGEST_TOKEN);
     const INGEST_ONLY_ACTIONS = new Set(['ingest-crm-tickets', 'get-crm-assign-queue', 'ack-crm-assign']);
     if (!isUser && !(isIngest && INGEST_ONLY_ACTIONS.has(action))) {
@@ -1483,6 +1487,13 @@ function toKST(dtStr,timeZone){
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // 길이 노출을 줄인 상수시간 비교 (타이밍 공격 완화)
+// TRUSTED_IPS: 쉼표로 구분한 회사 공인 IP 목록 (시크릿 — 공개 저장소에 주소를 남기지 않는다)
+function isTrustedIp(request, env) {
+  const ip = (request.headers.get('CF-Connecting-IP') || '').trim();
+  if (!ip) return false;
+  return String(env.TRUSTED_IPS || '').split(',').map(s => s.trim()).filter(Boolean).includes(ip);
+}
+
 function safeEqual(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
   let diff = a.length ^ b.length;

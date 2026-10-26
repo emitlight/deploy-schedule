@@ -1416,7 +1416,8 @@ let authPromptOpen = false;   // 여러 요청이 동시에 401을 받아도 프
     const res = await _origFetch(input, init);
     if (isWorker && res.status === 401 && !authPromptOpen) {
       authPromptOpen = true;
-      const pw = prompt('🔑 이 대시보드 접근 비밀번호를 입력하세요 (관리자에게 문의)\n관리자: hayoung.lee@softcamp.co.kr');
+      // 회사 인터넷에서는 서버가 비밀번호 없이 통과시킨다 — 이 창은 회사 밖에서 접속했을 때만 뜬다
+      const pw = prompt('🔑 회사 밖에서 접속하셨습니다. 접근 비밀번호를 입력하세요 (회사 인터넷에서는 입력 없이 열립니다)\n관리자: hayoung.lee@softcamp.co.kr');
       if (pw) { localStorage.setItem('appPassword', pw); location.reload(); }
       else    { localStorage.removeItem('appPassword'); authPromptOpen = false; }
     }

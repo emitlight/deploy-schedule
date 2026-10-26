@@ -184,6 +184,7 @@ Worker의 KV(`SETTINGS` / 키 `roster-config`)에 저장되어 **모든 PC에 �
 
 ```
 APP_PASSWORD(⭐필수)   ← 미설정 시 Worker가 503으로 전면 차단(fail-closed)
+TRUSTED_IPS(시크릿)   ← 회사 공인 IP(쉼표 구분). 이 주소에서 온 요청은 비밀번호 없이 통과(CF-Connecting-IP). 배포하기.bat 이 회사 인터넷에서 1회 등록, 회선 변경 시 `node tools/deploy.mjs --update-ip`
 GRAPH_CLIENT_ID / GRAPH_TENANT_ID / GRAPH_CLIENT_SECRET(⭐)
 MEMBER_EMAILS  {"이하영":"hayoung.lee@softcamp.co.kr", ...}
 MEMBER_IDS     {"이하영":2, "이송민":1, ...}
@@ -258,7 +259,7 @@ CI 배포(`deploy-worker.yml`)는 수동 실행 전용. 켜려면 GitHub Secrets
 | 항목 | 상태 |
 |------|------|
 | 저장소가 **public** | 대시보드·소스가 외부 공개. 데이터는 `APP_PASSWORD`로 보호 |
-| 공유 비밀번호 방식 | 사용자 식별·만료 없음. **Cloudflare Access(SSO) 전환 권장** — 보안 검토 필요 |
+| 공유 비밀번호 방식 | 사용자 식별·만료 없음. 2026-10-26부터 **회사 인터넷(TRUSTED_IPS)은 비밀번호 없이 통과**, 외부만 비밀번호. 같은 회사 주소로 나가는 손님 와이파이가 있으면 방문객도 접근 가능 — 보안 검토 필요. 외부까지 무비번이 필요하면 Cloudflare Access(SSO) |
 | vtiger 연동 | IT 관리자에게 Cloudflare IP 화이트리스트 요청 필요 |
 | 아웃룩 일정 자동 생성 | EWS `ApplicationImpersonation` 서비스 계정 필요 |
 | 아웃룩ID 뒤 16자 사용 | 충돌 확률 낮으나 존재. 형식 변경 시 기존 사본·수동분류 소실되므로 유지 중 |
