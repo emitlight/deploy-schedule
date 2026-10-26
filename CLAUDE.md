@@ -55,6 +55,9 @@
 ├── 시스템정리.md            ← 개발자용 기술 개요
 ├── 테스트시나리오_배포지원시스템.md
 ├── 고도화_계획서.md         ← 2026-10-13 개편 배경·계획
+├── 배포하기.bat             ← Worker 배포 자동화 (더블클릭) → tools/deploy.mjs
+├── tools/                  ← deploy.mjs · 배포_자동화_안내.md (GitHub Secrets 설정법)
+├── media/                  ← 첫 방문 안내 영상(guide.mp4)·포스터 — public 저장소이므로 실명 고객사·비밀번호 노출 금지
 ├── sync/                   ← CRM 배포지원요청 티켓 동기화 스크립트 (사내 서버에서 실행 → ingest-crm-tickets)
 ├── 테스트/                  ← 회귀 테스트 (node 테스트/*.mjs — 코드 수정 후 반드시 실행)
 ├── 보고서/                  ← 고도화 결과 보고 PPT · 기능정리_및_검증결과.md
@@ -199,7 +202,8 @@ VTIGER_URL / VTIGER_USERNAME / VTIGER_ACCESS_KEY(⭐) / VTIGER_MEMBER_IDS
 | 대상 | 방법 |
 |------|------|
 | 대시보드 | `git push origin main` → GitHub Pages 자동 (1~2분) |
-| Worker | CI 자동 (`cloudflare-worker.js`/`wrangler.toml` 변경 시). 수동은 `npx wrangler deploy --keep-vars` |
+| Worker | CI 자동 (`cloudflare-worker.js`/`wrangler.toml` 변경 시). 수동은 **`배포하기.bat` 더블클릭** (= `node tools/deploy.mjs`: 테스트 → 로그인 확인 → `wrangler deploy --keep-vars` → 응답 확인 → 선택적으로 사내 서버 스크립트 갱신). 안내: `tools/배포_자동화_안내.md` |
+| 안내 영상 | `media/guide.mp4` + `media/guide-poster.jpg` — 첫 방문 시 팝업 자동 재생(하루 1회, '다시 보지 않기'·끝까지 시청 시 중단). 영상 교체 시 `index.html` 의 `INTRO_VIDEO_VER` 를 올릴 것. 원본 제작: `보고서/영상/_제작파일/` (음성 edge-tts `ko-KR-SunHiNeural`) |
 
 > ⚠️ **`--keep-vars` 필수.** `wrangler.toml`에 활성 `[vars]` 블록이 없어서,
 > 이 옵션 없이 배포하면 대시보드 환경변수가 전부 삭제되고 Cron이 조용히 멈춘다.

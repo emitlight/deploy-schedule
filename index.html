@@ -786,6 +786,22 @@
   }
   .guide-modal-body ul, .guide-modal-body ol { padding-left:20px; }
   .guide-modal-body hr { border:none; border-top:1px solid #e8eaf6; margin:16px 0; }
+
+  /* ── 사용 안내 영상 팝업 (첫 방문 시 자동) ─────────────────────────── */
+  .intro-video-modal { width:min(1040px,96vw); max-height:94vh; overflow:hidden; }
+  .intro-video-wrap { position:relative; background:#0e142c; aspect-ratio:16/9; }
+  .intro-video-wrap video { width:100%; height:100%; display:block; background:#0e142c; }
+  .intro-sound-btn {
+    position:absolute; right:16px; bottom:16px; padding:10px 16px; border:none; border-radius:999px;
+    background:#ffc107; color:#1a1a1a; font-weight:700; font-size:14px; cursor:pointer;
+    box-shadow:0 4px 14px rgba(0,0,0,0.3);
+  }
+  .intro-sound-btn[hidden] { display:none; }
+  .intro-video-foot {
+    display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+    padding:12px 20px; font-size:13px; color:#555;
+  }
+  .intro-video-foot label { display:flex; align-items:center; gap:6px; cursor:pointer; }
 </style>
 <!-- 서체: IBM Plex Sans KR (SIL OFL 1.1 — 상업 사용 가능, 라이선스 확인 필요). 로드 실패 시 맑은 고딕으로 대체 -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1052,6 +1068,7 @@
     <div class="hdr-dd">
       <button class="btn btn-white" onclick="toggleHdrMenu(event,'helpMenu')">도움말 ▾</button>
       <div class="hdr-menu" id="helpMenu">
+        <button onclick="openIntroVideo();closeHdrMenus()">🎬 사용 안내 영상</button>
         <button onclick="openGuideModal();closeHdrMenus()">사용가이드</button>
         <button onclick="openTagModal();closeHdrMenus()">아웃룩 태그 규칙</button>
       </div>
@@ -4071,9 +4088,70 @@ function closeTagModal() { document.getElementById('tagModal').classList.remove(
 document.addEventListener('DOMContentLoaded', () => {
   closeOnOverlayClick('guideModal', closeGuideModal);
   closeOnOverlayClick('tagModal', closeTagModal);
+  closeOnOverlayClick('introVideoModal', closeIntroVideo);
+});
+
+// ── 사용 안내 영상 팝업 ────────────────────────────────────────────────
+// 처음 들어온 사람에게 한 번 자동으로 보여 준다. '다시 보지 않기'를 체크하면 이 PC에서는 다시 안 뜬다.
+// 영상이 새로 바뀌면 INTRO_VIDEO_VER 를 올려서 모두에게 한 번 더 보여 준다.
+// 브라우저는 소리 있는 자동재생을 막기 때문에 무음으로 시작하고 '소리 켜기' 버튼을 띄운다(자막은 영상에 포함).
+const INTRO_VIDEO_VER = '2026-10-26';
+function lsGet(k) { try { return localStorage.getItem(k); } catch (_) { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (_) {} }
+
+function openIntroVideo(auto) {
+  const modal = document.getElementById('introVideoModal');
+  const v = document.getElementById('introVideo');
+  const btn = document.getElementById('introSoundBtn');
+  if (!v.getAttribute('src')) v.src = v.dataset.src;   // 열 때만 내려받는다 (첫 화면 로딩을 느리게 하지 않음)
+  document.getElementById('introNoMore').checked = lsGet('introVideoSeen') === INTRO_VIDEO_VER;
+  modal.classList.add('open');
+  v.currentTime = 0;
+  v.muted = !!auto;            // 메뉴에서 직접 연 경우엔 소리와 함께 재생
+  btn.hidden = !auto;
+  v.play().catch(() => { v.muted = true; btn.hidden = false; v.play().catch(() => {}); });
+}
+function introSoundOn() {
+  const v = document.getElementById('introVideo');
+  v.muted = false; v.currentTime = 0; v.play().catch(() => {});
+  document.getElementById('introSoundBtn').hidden = true;
+}
+function closeIntroVideo() {
+  const v = document.getElementById('introVideo');
+  v.pause();
+  if (document.getElementById('introNoMore').checked) lsSet('introVideoSeen', INTRO_VIDEO_VER);
+  document.getElementById('introVideoModal').classList.remove('open');
+}
+window.addEventListener('load', () => {
+  // 끝까지 본 사람은 다시 띄우지 않는다
+  document.getElementById('introVideo').addEventListener('ended', () => lsSet('introVideoSeen', INTRO_VIDEO_VER));
+  if (lsGet('introVideoSeen') === INTRO_VIDEO_VER) return;
+  const today = new Date().toISOString().slice(0, 10);
+  if (lsGet('introVideoShownOn') === today) return;   // 체크 안 하고 닫아도 하루 한 번만
+  lsSet('introVideoShownOn', today);
+  // 비밀번호 입력창(첫 접속)이 먼저 처리되도록 잠시 뒤에 띄운다
+  setTimeout(() => { if (!authPromptOpen) openIntroVideo(true); }, 1200);
 });
 
 </script>
+
+  <!-- 사용 안내 영상 팝업 -->
+  <div class="guide-modal-overlay" id="introVideoModal">
+    <div class="guide-modal intro-video-modal">
+      <div class="guide-modal-header">
+        🎬 배포지원 대시보드 사용 안내 (약 3분)
+        <button onclick="closeIntroVideo()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#888;" aria-label="닫기">✕</button>
+      </div>
+      <div class="intro-video-wrap">
+        <video id="introVideo" data-src="media/guide.mp4" poster="media/guide-poster.jpg" controls playsinline preload="none"></video>
+        <button class="intro-sound-btn" id="introSoundBtn" onclick="introSoundOn()" hidden>🔊 소리 켜고 처음부터</button>
+      </div>
+      <div class="intro-video-foot">
+        <label><input type="checkbox" id="introNoMore"> 다시 보지 않기 (도움말 ▾ 메뉴에서 언제든 다시 볼 수 있어요)</label>
+        <button class="btn btn-white" onclick="closeIntroVideo()">닫기</button>
+      </div>
+    </div>
+  </div>
 
   <!-- 사용가이드 모달 -->
   <div class="guide-modal-overlay" id="guideModal">
