@@ -430,34 +430,7 @@ export default {
         }
 
         case 'get-spinlog': {
-          if (!env.NOTION_SECRET||!env.SPINLOG_DB_ID) throw new Error('Notion 미설정');
-          // 전체 이력을 커서로 끝까지 조회. 과거엔 1페이지만 읽어, 이력이 쌓이면
-          // 오래된 기록이 창 밖으로 밀려 "한 번도 안 뽑힌 사람"으로 오분류됐다.
-          const rows=[]; let cursor;
-          for (let page=0; page<50; page++) {
-            const payload={sorts:[{timestamp:'created_time',direction:'descending'}],page_size:100};
-            if (cursor) payload.start_cursor=cursor;
-            const res=await notion(env,'POST',`/databases/${env.SPINLOG_DB_ID}/query`,payload);
-            const d=await res.json();
-            rows.push(...(d.results||[]));
-            if (!d.has_more || !d.next_cursor) break;
-            cursor=d.next_cursor;
-          }
-          const data={results:rows};
-          const logs=(data.results||[]).map(p=>{
-            const pr=p.properties||{};
-            return {
-              id:         p.id,
-              name:       getNotionText(pr,'이름'),
-              targetDate: pr['날짜']?.date?.start||'',
-              spunAt:     getNotionRichText(pr,'스핀일'),
-              memberId:   pr['멤버ID']?.number??null,
-              createdTime:p.created_time,
-            };
-          });
-          // 각 이력이 '실제 배정'까지 갔는지 확인 — 연결된 배포 일정이 있으면 완료로 본다.
-          // (추첨만 하고 저장하지 않은 건과 구분하기 위함)
-          await annotateSpinLogs(env, logs);
+          const logs = await loadSpinLogs(env);
           result={ok:true,logs}; break;
         }
 
@@ -828,9 +801,11 @@ async function buildAvailability(env, { startDate, endDate, startTime, endTime }
   const cfg = await readSettings(env);
   const roster = buildRoster(env, cfg.includeExtra);
   // 아웃룩(원천) + Notion(배정·수동분류)을 합쳐 판정 입력을 만든다
-  const [outlook, notionRows] = await Promise.all([
+  const [outlook, notionRows, spinLogs] = await Promise.all([
     cachedSyncOutlook(env, startDate, endDate),
     loadNotionEventsByRange(env, startDate, endDate, false).then(ps => ps.map(parseNotionSchedule).filter(Boolean)),
+    // 배정 순번용 — 실패해도 판정은 계속하고, 순번 없이 동일 확률로 돌린다
+    loadSpinLogs(env).catch(e => { console.error('[availability] 이력 조회 실패:', e.message); return null; }),
   ]);
   const clsByOid = new Map();
   notionRows.filter(r => r.fromOutlook).forEach(r => clsByOid.set(r.outlookId || r.id, r.classification));
@@ -840,7 +815,7 @@ async function buildAvailability(env, { startDate, endDate, startTime, endTime }
   const events = outlookEvents.concat(assignments);
 
   const failedIds = new Set(outlook.failedMemberIds || []);
-  const members = roster.map(m => {
+  const judged = roster.map(m => {
     // 아웃룩 조회에 실패한 멤버는 일정이 0건으로 보여 '가능'으로 오판된다.
     // 바쁜 사람이 뽑히는 것을 막기 위해, 확인되기 전까지 후보에서 제외한다.
     const stale = failedIds.has(m.id);
@@ -859,6 +834,8 @@ async function buildAvailability(env, { startDate, endDate, startTime, endTime }
       stale,
     };
   });
+  const last = spinLogs ? lastAssignedByMember(spinLogs) : null;
+  const members = assignDrawRanks(judged, last);
 
   // 이 기간에 이미 배정된 사람 / 기간 전체가 배정된 사람(= 룰렛 잠금 대상)
   const byMember = {};
@@ -876,6 +853,9 @@ async function buildAvailability(env, { startDate, endDate, startTime, endTime }
     range: { startDate, endDate, startTime: sT, endTime: eT },
     weekdays: days,
     members,
+    // 이번 추첨 대상 (순번 0). 순번을 못 구하면 가능 인원 전체(동일 확률)
+    drawPool: members.filter(m => m.rank === 0).map(m => m.id),
+    drawRule: last ? 'rotation' : 'uniform-fallback',
     assigned,
     fullyAssignedBy: assigned.filter(a => a.full).map(a => a.name),
     failedMembers: (outlook.failed || []).map(f => f.name),
@@ -1134,6 +1114,71 @@ function buildRoster(env, includeExtraOverride) {
     .sort((a,b) => a.id - b.id);
 }
 
+// ── 스핀 이력 전체 조회 + '배정 완료' 표시 (이력 탭·통계·배정 순번이 함께 쓴다) ──
+// 전체 이력을 커서로 끝까지 조회. 과거엔 1페이지만 읽어, 이력이 쌓이면
+// 오래된 기록이 창 밖으로 밀려 "한 번도 안 뽑힌 사람"으로 오분류됐다.
+async function loadSpinLogs(env) {
+  if (!env.NOTION_SECRET || !env.SPINLOG_DB_ID) throw new Error('Notion 미설정');
+  const rows = [];
+  let cursor;
+  for (let page = 0; page < 50; page++) {
+    const payload = { sorts:[{timestamp:'created_time',direction:'descending'}], page_size:100 };
+    if (cursor) payload.start_cursor = cursor;
+    const res = await notion(env,'POST',`/databases/${env.SPINLOG_DB_ID}/query`,payload);
+    const d = await res.json();
+    rows.push(...(d.results||[]));
+    if (!d.has_more || !d.next_cursor) break;
+    cursor = d.next_cursor;
+  }
+  const logs = rows.map(p => {
+    const pr = p.properties || {};
+    return {
+      id:          p.id,
+      name:        getNotionText(pr,'이름'),
+      targetDate:  pr['날짜']?.date?.start || '',
+      spunAt:      getNotionRichText(pr,'스핀일'),
+      memberId:    pr['멤버ID']?.number ?? null,
+      createdTime: p.created_time,
+    };
+  });
+  // 각 이력이 '실제 배정'까지 갔는지 확인 — 연결된 배포 일정이 있으면 완료로 본다.
+  // (추첨만 하고 저장하지 않은 건과 구분하기 위함)
+  await annotateSpinLogs(env, logs);
+  return logs;
+}
+
+// ── 배정 순번 (2026-10-27 운영자 결정 — 균등 추첨에서 변경) ─────────────────
+// 오래 배정되지 않은 사람부터 뽑는다. 한 번도 배정되지 않은 사람이 맨 앞(0순위).
+//  · 기준: '배정 완료'(배포 일정까지 등록)된 배정의 마지막 투입일 — 추첨만 됨·취소는 제외
+//  · 같은 순번(마지막 투입일이 같음)끼리는 동일 확률 추첨
+//  · [긴급] 표시된 사람은 같은 순번 안에서 뒤로 (빼지 말아 달라는 뜻이므로 순번을 양보)
+// 반환: 멤버ID → { date(마지막 투입일), range, ticketNo }  /  대조 실패 시 null
+function lastAssignedByMember(logs) {
+  const memberLogs = logs.filter(l => l.memberId != null);
+  // 배포 일정 대조에 실패하면 confirmed 가 비어 있다 → 순번을 알 수 없으므로 null
+  if (memberLogs.some(l => l.confirmed === undefined)) return null;
+  const last = {};
+  for (const l of memberLogs) {
+    if (l.confirmed !== true) continue;
+    const end = String(l.confirmedRange || '').split('~').pop() || l.targetDate;
+    if (!end) continue;
+    if (!last[l.memberId] || end > last[l.memberId].date)
+      last[l.memberId] = { date: end, range: l.confirmedRange || end, ticketNo: l.ticketNo || null };
+  }
+  return last;
+}
+
+// 가능 인원에게 순번을 매긴다. 0 = 이번 추첨 대상, 1·2·3… = 대기 순번. 불가 인원은 null.
+function assignDrawRanks(members, last) {
+  const key = m => `${last && last[m.id] ? last[m.id].date : '0000-00-00'}|${m.urgent ? 1 : 0}`;
+  const keys = [...new Set(members.filter(m => m.available).map(key))].sort();
+  return members.map(m => ({
+    ...m,
+    lastAssigned: last ? (last[m.id] || null) : undefined,
+    rank: m.available ? (last ? keys.indexOf(key(m)) : 0) : null,
+  }));
+}
+
 // ── 스핀 이력에 '실제 배정 완료' 여부 표시 ────────────────────────────────
 // 스핀 이력(SPINLOG)은 '추첨했다'는 기록일 뿐이라, 배정 모달에서 저장을 누르지 않으면
 // 일정이 만들어지지 않는다. 운영자가 둘을 구분할 수 있도록 배포 일정과 대조한다.
@@ -1200,33 +1245,9 @@ async function annotateSpinLogs(env, logs) {
 // [취소]·[초기화] 로그는 멤버ID가 없어 자연히 제외된다.
 // from/to로 기간을 좁히면 초기 테스트 스핀을 걸러낼 수 있다.
 async function buildStats(env, { from, to } = {}) {
-  if (!env.NOTION_SECRET || !env.SPINLOG_DB_ID) throw new Error('Notion 미설정');
-  const rows = [];
-  let cursor;
-  for (let page = 0; page < 50; page++) {
-    const payload = { sorts:[{timestamp:'created_time',direction:'descending'}], page_size:100 };
-    if (cursor) payload.start_cursor = cursor;
-    const res = await notion(env,'POST',`/databases/${env.SPINLOG_DB_ID}/query`,payload);
-    const d = await res.json();
-    rows.push(...(d.results||[]));
-    if (!d.has_more || !d.next_cursor) break;
-    cursor = d.next_cursor;
-  }
-  const logs = rows.map(p => {
-    const pr = p.properties || {};
-    return {
-      id: p.id,
-      name: getNotionText(pr,'이름'),
-      targetDate: pr['날짜']?.date?.start || '',
-      memberId: pr['멤버ID']?.number ?? null,
-      spunAt: getNotionRichText(pr,'스핀일'),
-      createdTime: p.created_time,
-    };
-  });
-
   // 추첨만 하고 일정 등록을 안 한 건(confirmed:false)은 '배정'이 아니므로 집계에서 뺀다.
   // (배포 일정 대조에 실패하면 confirmed 가 비어 있고, 그때는 보수적으로 집계에 포함)
-  await annotateSpinLogs(env, logs);
+  const logs = await loadSpinLogs(env);
 
   const roster = buildRoster(env, (await readSettings(env)).includeExtra);
   const rosterIds = new Set(roster.map(m => m.id));

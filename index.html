@@ -975,6 +975,10 @@
   .rr-item { font-weight: 500; border-width: 1px; }
   .rr-item.avail   { background: var(--verdigris-tint); color: #0A5C4C; border-color: #BFE0D6; }
   .rr-item.unavail { background: var(--surface); color: #A3ABBA; border-color: var(--rule-soft); }
+  /* 배정 순번: 이번 추첨 대상은 진하게, 대기 인원은 옅게 + 대기 번호 */
+  .rr-item.avail.draw { background: var(--verdigris); color: #fff; border-color: var(--verdigris); }
+  .rr-item.avail.wait { background: var(--paper); color: var(--graphite); border-color: var(--rule); }
+  .rr-rank { display: block; font-size: 9px; font-weight: 600; opacity: .85; margin-top: 1px; }
   .rr-unavail-reasons { background: var(--caution-tint); border-color: #F2D9AE; color: #6B4508; border-radius: var(--radius); }
   .rr-unavail-reasons .ur-title { color: var(--caution); font-weight: 600; }
   .rr-unavail-reasons .ur-name  { color: var(--ink); font-weight: 600; }
@@ -1310,13 +1314,13 @@
       </div>
       <p class="rr-info" id="rrInfo"></p>
       <div class="rr-queue-section">
-        <div class="rr-queue-label">배포 가능 멤버</div>
+        <div class="rr-queue-label">배포 가능 멤버 · 순번</div>
         <div class="rr-queue" id="rrQueue"></div>
       </div>
       <div class="rr-unavail-reasons" id="rrUnavailReasons"></div>
       <div class="rr-assigned-notice" id="rrAssignedNotice" style="display:none;"></div>
-      <div class="rr-rule-note">
-        배포 가능한 인원 중 <strong>동일한 확률</strong>로 추첨합니다. 결과는 스핀 이력에 남습니다.
+      <div class="rr-rule-note" id="rrRuleNote">
+        <strong>오래 배정되지 않은 사람부터</strong> 순번대로 뽑습니다 (한 번도 안 간 사람이 맨 앞). 같은 순번끼리는 동일한 확률로 추첨합니다.
       </div>
       <div class="wheel-wrap">
         <div class="wheel-pointer">▼</div>
@@ -3073,11 +3077,10 @@ function refreshRoulette() {
   const rosterSize = ctx ? ctx.members.length : pool().length;
 
   if (ctx) {
-    // 서버가 내려준 가용 멤버를 rrOrder 순서로 배치 (순서는 표시용 — 확률은 모두 동일)
-    const byId = new Map(ctx.members.map(m => [m.id, m]));
-    const ordered = rrOrder.filter(id => byId.has(id))
-      .concat(ctx.members.map(m => m.id).filter(id => !rrOrder.includes(id)));
-    wheelSlices = ordered.map(id => byId.get(id)).filter(m => m.available)
+    // 배정 순번(서버 판정): 오래 배정되지 않은 사람(순번 0)만 돌림판에 올린다 — 그 안에서는 동일 확률
+    // 구버전 서버(drawPool 없음)면 가능 인원 전체
+    const inPool = m => !Array.isArray(ctx.drawPool) || ctx.drawPool.includes(m.id);
+    wheelSlices = ctx.members.filter(m => m.available && inPool(m))
       .map(m => ({ ...m, team: (ALL().find(x => x.id === m.id) || {}).team || m.team || '' }));
   } else {
     wheelSlices = rrOrder
@@ -3093,8 +3096,14 @@ function refreshRoulette() {
         ? ` · ⚠️ ${ctx.failedMembers.join(', ')} 일정 조회 실패`
         : '')
     : ' · ⚠️ 서버 확인 실패, 이 PC 기준';
+  const availCount = ctx ? ctx.members.filter(m => m.available).length : wheelSlices.length;
   document.getElementById('rrInfo').textContent =
-    `${rangeLabel} ${depStart}~${depEnd} · 가능 ${wheelSlices.length}명 / 전체 ${rosterSize}명${srcNote}`;
+    `${rangeLabel} ${depStart}~${depEnd} · 가능 ${availCount}명 / 전체 ${rosterSize}명` +
+    (ctx && availCount > wheelSlices.length ? ` · 이번 순번 ${wheelSlices.length}명` : '') + srcNote;
+  const ruleNote = document.getElementById('rrRuleNote');
+  if (ruleNote) ruleNote.innerHTML = ctx && ctx.drawRule === 'rotation'
+    ? '<strong>오래 배정되지 않은 사람부터</strong> 순번대로 뽑습니다 (한 번도 안 간 사람이 맨 앞). 같은 순번끼리는 동일한 확률로 추첨합니다.'
+    : '⚠️ 배정 이력을 확인하지 못해 이번에는 <strong>가능 인원 전체를 동일한 확률</strong>로 추첨합니다.';
   document.getElementById('resultBanner').className = 'result-banner';
   document.getElementById('resultBanner').innerHTML = '';
   document.getElementById('assignDeployBtn').className = 'assign-deploy-btn';
@@ -3217,20 +3226,24 @@ function renderAvailableMembers() {
 
   // 서버 판정이 있으면 서버 명단 기준 (모든 PC 동일). 없으면 기존 로컬 계산.
   if (ctx) {
-    const byId = new Map(ctx.members.map(m => [m.id, m]));
-    const order = rrOrder.filter(id => byId.has(id))
-      .concat(ctx.members.map(m => m.id).filter(id => !rrOrder.includes(id)));
-    const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-    document.getElementById('rrQueue').innerHTML = order.map(id => {
-      const m = byId.get(id);
+    // 순번 순서로: 이번 추첨 대상 → 대기 1·2·3… → 불가
+    const rankOf = m => m.rank == null ? 999 : m.rank;
+    const ordered = ctx.members.slice().sort((a, b) => rankOf(a) - rankOf(b) || a.id - b.id);
+    const esc = escHtml;
+    const md = d => String(d || '').replace(/(\d{4})-(\d{2})-(\d{2})/g, (_, y, mo, da) => `${+mo}/${+da}`);
+    document.getElementById('rrQueue').innerHTML = ordered.map(m => {
+      const lastTxt = m.lastAssigned ? `마지막 배정 ${md(m.lastAssigned.range)}` : (m.lastAssigned === null ? '배정 이력 없음' : '');
       const tip = m.available
-        ? (m.urgent ? '⚠️ 가능하나 긴급 업무 중 — 신중 판단' : '배포 가능')
+        ? [m.urgent ? '⚠️ 가능하나 긴급 업무 중 — 같은 순번 안에서 뒤로' : '배포 가능', lastTxt].filter(Boolean).join(' · ')
         : (m.reasons || []).map(r => `${r.dates} ${r.text}`.trim()).join(' / ');
       const hint = m.available ? '' : (m.reasons || []).slice(0,1).map(r => r.dates).join('');
-      return `<div class="rr-item ${m.available ? 'avail' : 'unavail'}" title="${esc(tip)}">
+      const rankCls = !m.available || m.rank == null ? '' : (m.rank === 0 ? ' draw' : ' wait');
+      const rankTxt = !m.available || m.rank == null ? '' : (m.rank === 0 ? '이번 추첨' : `대기 ${m.rank}`);
+      return `<div class="rr-item ${m.available ? 'avail' : 'unavail'}${rankCls}" title="${esc(tip)}">
         ${m.urgent ? '<span style="margin-right:2px;" title="긴급 업무 중">⚠️</span>' : ''}
         ${m.stale ? '<span style="margin-right:2px;" title="아웃룩 조회 실패 — 판정 신뢰 불가">❓</span>' : ''}
         ${esc(m.name)}
+        ${rankTxt ? `<span class="rr-rank">${rankTxt}</span>` : ''}
         ${hint ? `<span class="rr-conflict-hint">${esc(hint)}</span>` : ''}
       </div>`;
     }).join('');
@@ -3766,7 +3779,7 @@ async function loadStats() {
     </table>
     <p class="rr-info" style="margin-top:8px;font-size:10px;">
       ※ 멤버를 누르면 어떤 건에 배정됐는지 볼 수 있습니다.
-      가용 인원 중 동일 확률 추첨이므로 단기간에는 편차가 생길 수 있고, 기간을 넓게 볼수록 평균에 수렴합니다.
+      오래 배정되지 않은 사람부터 순번대로 뽑으므로, 일정이 맞는 한 배정 횟수가 고르게 맞춰집니다.
     </p>`;
 }
 
