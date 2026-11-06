@@ -249,7 +249,8 @@ async function processAssignQueue(pool) {
       projectCode: parseField(r.description, '프로젝트코드'),
       periodFrom: p.from, periodTo: p.to,
       createdKst: r.created_kst || '',
-      url: `${crmBase}/index.php?module=HelpDesk&action=DetailView&record=${r.ticketid}`,
+      // vtiger 7 형식 — 예전 action=DetailView 는 "Handler not found" 로 열리지 않았다
+      url: `${crmBase}/index.php?module=HelpDesk&view=Detail&record=${r.ticketid}`,
     };
   });
 

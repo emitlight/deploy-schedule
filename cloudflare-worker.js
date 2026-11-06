@@ -461,7 +461,7 @@ export default {
             title:t.ticket_title||t.title||'',
             status:t.ticketstatus||t.status||'',
             assigneeId:t.assigned_user_id||'',
-            ticketUrl:`${env.VTIGER_URL.replace(/\/$/,'')}/index.php?module=HelpDesk&action=DetailView&record=${(t.id||'').split('x')[1]||tid}`};
+            ticketUrl:`${env.VTIGER_URL.replace(/\/$/,'')}/index.php?module=HelpDesk&view=Detail&record=${(t.id||'').split('x')[1]||tid}`};
           break;
         }
 

@@ -1404,6 +1404,13 @@ function escHtml(s) {
 // → JSON 문자열로 만든 뒤 HTML 이스케이프한다.
 function jsArg(s) { return escHtml(JSON.stringify(String(s ?? ''))); }
 
+// CRM 티켓 주소 보정 — vtiger 7 은 'view=Detail' 형식만 연다.
+// 예전 형식(action=DetailView)은 CRM이 "Handler not found" 오류를 돌려줘 티켓으로 이동하지 않았다.
+// (서버·사내 스크립트도 고쳤지만, 이미 저장된 주소도 바로 열리도록 화면에서 한 번 더 바꾼다)
+function crmUrl(u) {
+  return String(u || '').replace(/([?&])action=DetailView(?=&|$)/, '$1view=Detail');
+}
+
 // ── Worker 호출 보안: 접근 비밀번호(X-Auth) 자동 첨부 + 401 재입력 / 503 안내 ──
 // 서버는 APP_PASSWORD 미설정 시 503(fail-closed)으로 전면 차단한다.
 let authPromptOpen = false;   // 여러 요청이 동시에 401을 받아도 프롬프트는 1회만
@@ -2220,7 +2227,7 @@ function openMailtoLink(memberName, date, startTime, endTime, title, note = '', 
   if (ticket) {
     lines.push('');
     lines.push('자세한 사항은 배포관리요청서와 티켓을 확인 부탁드립니다.');
-    if (ticket.url) lines.push(ticket.url);
+    if (ticket.url) lines.push(crmUrl(ticket.url));
   }
   lines.push('');
   lines.push('일정 확인 후 문의사항은 파트너프로그램팀(ps2@softcamp.co.kr)에게 연락해 주세요.');
@@ -2590,7 +2597,7 @@ function renderCrmTickets() {
           : ` <span class="ct-badge crm" title="사내 동기화 스크립트가 CRM 담당자를 바꿉니다">CRM 담당자 → ${esc(q.memberName)} 변경 대기</span>`);
     return `<div class="ct-card ${a && !mismatch ? 'assigned' : ''}${mismatch ? ' urgent' : ''}">
       <div>
-        ${t.url ? `<a class="ct-no" href="${esc(t.url)}" target="_blank" rel="noopener">${esc(t.ticketNo)}</a>`
+        ${t.url ? `<a class="ct-no" href="${esc(crmUrl(t.url))}" target="_blank" rel="noopener">${esc(t.ticketNo)}</a>`
                 : `<span class="ct-no">${esc(t.ticketNo)}</span>`}
         ${badge}${qBadge}
       </div>
@@ -3828,7 +3835,7 @@ function renderStatItems(items) {
   return `<ul class="stat-items">${items.map(it => {
     const t = it.ticketNo ? crmTickets.find(x => x.ticketNo === it.ticketNo) : null;
     const ticket = it.ticketNo
-      ? (t && t.url ? `<a href="${escHtml(t.url)}" target="_blank" rel="noopener">${escHtml(it.ticketNo)}</a>` : escHtml(it.ticketNo))
+      ? (t && t.url ? `<a href="${escHtml(crmUrl(t.url))}" target="_blank" rel="noopener">${escHtml(it.ticketNo)}</a>` : escHtml(it.ticketNo))
       : '';
     const what = [t && t.account, it.title].filter(Boolean).map(escHtml).join(' · ') || '배포지원';
     return `<li>
@@ -3955,7 +3962,7 @@ async function lookupCrmTicket() {
     document.getElementById('crmTicketTitle').textContent = data.title || `티켓 #${ticketId}`;
     document.getElementById('crmCurrentAssignee').textContent = data.assigneeId || '—';
     const link = document.getElementById('crmTicketLink');
-    link.href = data.ticketUrl || '#';
+    link.href = data.ticketUrl ? crmUrl(data.ticketUrl) : '#';
     link.style.display = data.ticketUrl ? '' : 'none';
     document.getElementById('crmAssignBtn').disabled = !lastWinner;
     document.getElementById('crmTicketCard').classList.add('visible');
@@ -4024,7 +4031,7 @@ async function lookupDeployCrmTicket() {
     document.getElementById('deployCrmTicketTitle').textContent = data.title;
     document.getElementById('deployCrmCurrentAssignee').textContent = data.assigneeId || '—';
     const link = document.getElementById('deployCrmTicketLink');
-    link.href = data.ticketUrl; link.style.display = 'inline';
+    link.href = crmUrl(data.ticketUrl); link.style.display = 'inline';
     document.getElementById('deployCrmTicketCard').classList.add('visible');
   } catch(e) {
     showDeployCrmStatus('오류: ' + e.message, 'error');
@@ -4101,7 +4108,7 @@ async function lookupEventCrmTicket() {
     document.getElementById('eventCrmTicketTitle').textContent = data.title;
     document.getElementById('eventCrmCurrentAssignee').textContent = data.assigneeId || '—';
     const link = document.getElementById('eventCrmTicketLink');
-    link.href = data.ticketUrl;
+    link.href = crmUrl(data.ticketUrl);
     document.getElementById('eventCrmTicketCard').classList.add('visible');
   } catch(e) {
     showEventCrmStatus('오류: ' + e.message, 'error');
