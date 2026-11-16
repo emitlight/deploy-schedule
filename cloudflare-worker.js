@@ -835,7 +835,8 @@ async function buildAvailability(env, { startDate, endDate, startTime, endTime }
     };
   });
   const last = spinLogs ? lastAssignedByMember(spinLogs) : null;
-  const members = assignDrawRanks(judged, last);
+  const recent = findRecentPick(last, todayKST());
+  const members = assignDrawRanks(judged, last, recent);
 
   // 이 기간에 이미 배정된 사람 / 기간 전체가 배정된 사람(= 룰렛 잠금 대상)
   const byMember = {};
@@ -853,9 +854,15 @@ async function buildAvailability(env, { startDate, endDate, startTime, endTime }
     range: { startDate, endDate, startTime: sT, endTime: eT },
     weekdays: days,
     members,
-    // 이번 추첨 대상 (순번 0). 순번을 못 구하면 가능 인원 전체(동일 확률)
+    // 이번 추첨 대상 (순위 0). 이력 대조에 실패하면 가능 인원 전체(동일 확률)
     drawPool: members.filter(m => m.rank === 0).map(m => m.id),
-    drawRule: last ? 'rotation' : 'uniform-fallback',
+    drawRule: last ? 'recent-last' : 'uniform-fallback',
+    // 직전 선정자 안내용 — 3개월 안이면 behind:true (맨 뒤로)
+    recentPick: recent ? {
+      // 추가 후보가 꺼져 있어도 이름은 보여 준다
+      names: recent.memberIds.map(id => (buildRoster(env, true).find(r => r.id === id) || {}).name || `#${id}`),
+      start: recent.start, cutoff: recent.cutoff, behind: recent.behind,
+    } : null,
     assigned,
     fullyAssignedBy: assigned.filter(a => a.full).map(a => a.name),
     failedMembers: (outlook.failed || []).map(f => f.name),
@@ -1147,34 +1154,69 @@ async function loadSpinLogs(env) {
   return logs;
 }
 
-// ── 배정 순번 (2026-10-27 운영자 결정 — 균등 추첨에서 변경) ─────────────────
-// 오래 배정되지 않은 사람부터 뽑는다. 한 번도 배정되지 않은 사람이 맨 앞(0순위).
-//  · 기준: '배정 완료'(배포 일정까지 등록)된 배정의 마지막 투입일 — 추첨만 됨·취소는 제외
-//  · 같은 순번(마지막 투입일이 같음)끼리는 동일 확률 추첨
-//  · [긴급] 표시된 사람은 같은 순번 안에서 뒤로 (빼지 말아 달라는 뜻이므로 순번을 양보)
-// 반환: 멤버ID → { date(마지막 투입일), range, ticketNo }  /  대조 실패 시 null
+// ── 추첨 대상 규칙 (2026-11-16 운영자 결정 — 10/27 '오래된 순번제'에서 변경) ──
+//  1) 아웃룩 일정상 가능한 인원 전원이 동일 확률로 추첨된다
+//  2) 직전에 선정된 사람만 맨 뒤로 미룬다 (다른 가능 인원이 없을 때만 뽑힘)
+//  3) 단, 그 선정이 오늘 기준 3개월보다 오래됐으면 1)과 같이 동일 확률 후보에 넣는다
+//  · '선정'은 '배정 완료'(배포 일정까지 등록)된 배정만 — 추첨만 됨·취소·초기화는 제외
+//  · '직전 선정' = 투입 시작일이 가장 늦은 배정의 담당자 (같은 날 시작한 2명 투입이면 모두)
+//  · [긴급] 표시된 사람은 같은 순위 안에서 뒤로 (빼지 말아 달라는 뜻이므로 순서를 양보)
+const RECENT_PICK_MONTHS = 3;
+
+// 멤버별 가장 최근 배정 — 멤버ID → { start(첫 투입일), date(마지막 투입일), range, ticketNo }
+// 배포 일정 대조에 실패하면(confirmed 비어 있음) 누가 직전 선정자인지 알 수 없으므로 null
 function lastAssignedByMember(logs) {
   const memberLogs = logs.filter(l => l.memberId != null);
-  // 배포 일정 대조에 실패하면 confirmed 가 비어 있다 → 순번을 알 수 없으므로 null
   if (memberLogs.some(l => l.confirmed === undefined)) return null;
   const last = {};
   for (const l of memberLogs) {
     if (l.confirmed !== true) continue;
-    const end = String(l.confirmedRange || '').split('~').pop() || l.targetDate;
-    if (!end) continue;
-    if (!last[l.memberId] || end > last[l.memberId].date)
-      last[l.memberId] = { date: end, range: l.confirmedRange || end, ticketNo: l.ticketNo || null };
+    const parts = String(l.confirmedRange || l.targetDate || '').split('~');
+    const start = parts[0], end = parts[parts.length - 1];
+    if (!start) continue;
+    if (!last[l.memberId] || start > last[l.memberId].start)
+      last[l.memberId] = { start, date: end, range: l.confirmedRange || start, ticketNo: l.ticketNo || null };
   }
   return last;
 }
 
-// 가능 인원에게 순번을 매긴다. 0 = 이번 추첨 대상, 1·2·3… = 대기 순번. 불가 인원은 null.
-function assignDrawRanks(members, last) {
-  const key = m => `${last && last[m.id] ? last[m.id].date : '0000-00-00'}|${m.urgent ? 1 : 0}`;
-  const keys = [...new Set(members.filter(m => m.available).map(key))].sort();
+// 오늘(한국 시간) YYYY-MM-DD
+function todayKST() {
+  return new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+}
+// 개월 가감 — 말일 보정 (예: 5/31 - 3개월 → 2/28)
+function addMonthsISO(dateStr, n) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const t = new Date(Date.UTC(y, m - 1 + n, 1));
+  const last = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() + 1, 0)).getUTCDate();
+  t.setUTCDate(Math.min(d, last));
+  return t.toISOString().slice(0, 10);
+}
+
+// 직전 선정자 — { memberIds, start, cutoff, behind(맨 뒤로 미루는지) } / 이력 없음·대조 실패 시 null
+function findRecentPick(last, today) {
+  if (!last) return null;
+  const entries = Object.entries(last);
+  if (entries.length === 0) return null;
+  const start = entries.reduce((a, [, v]) => (v.start > a ? v.start : a), '');
+  const cutoff = addMonthsISO(today, -RECENT_PICK_MONTHS);
+  return {
+    memberIds: entries.filter(([, v]) => v.start === start).map(([id]) => Number(id)),
+    start, cutoff,
+    behind: start >= cutoff,   // 3개월 안에 선정됐으면 맨 뒤로
+  };
+}
+
+// 가능 인원에게 순위를 매긴다. 0 = 이번 추첨 대상, 1·2… = 대기. 불가 인원은 null.
+// 순서: 일반 → [긴급] → 직전 선정자 → 직전 선정자이면서 [긴급]
+function assignDrawRanks(members, last, recent) {
+  const isRecent = m => !!(recent && recent.memberIds.includes(m.id));
+  const key = m => (isRecent(m) && recent.behind ? 2 : 0) + (m.urgent ? 1 : 0);
+  const keys = [...new Set(members.filter(m => m.available).map(key))].sort((a, b) => a - b);
   return members.map(m => ({
     ...m,
     lastAssigned: last ? (last[m.id] || null) : undefined,
+    recentPick: isRecent(m),
     rank: m.available ? (last ? keys.indexOf(key(m)) : 0) : null,
   }));
 }

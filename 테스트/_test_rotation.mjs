@@ -1,7 +1,8 @@
-// 배정 순번 (2026-10-27) — 오래 배정되지 않은 사람부터, 같은 순번끼리는 동일 확률
-//  [서버] 한 번도 안 간 사람 = 0순위 · 오래전 배정 > 최근 배정 · 추첨만/취소는 순번에 영향 없음
-//         [긴급]은 같은 순번 안에서 뒤로 · 이력 대조 실패 시 가능 인원 전체(동일 확률)로 폴백
-//  [화면] 돌림판에는 이번 순번만 올라간다
+// 추첨 대상 규칙 (2026-11-16 개정)
+//  [서버] 가능 인원 전원 동일 확률 · 직전 선정자만 맨 뒤로 · 그 선정이 3개월보다 오래됐으면 다시 동일 확률
+//         직전 선정 = 투입 시작일이 가장 늦은 '배정 완료' 건 (추첨만/취소 제외, 같은 날 시작한 2명이면 모두)
+//         [긴급]은 뒤로 · 이력 대조 실패 시 가능 인원 전체(동일 확률)로 폴백
+//  [화면] 돌림판에는 이번 추첨 대상만, 직전 선정자는 '직전 선정 · 후순위'로 표시
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -60,75 +61,106 @@ globalThis.fetch = async (u, init = {}) => {
   }
   throw new Error('예상 밖 호출 ' + url);
 };
-const DAYS = ['2026-10-28', '2026-10-29', '2026-10-30', '2026-11-02', '2026-11-03', '2026-11-04', '2026-11-05', '2026-11-06', '2026-11-09', '2026-11-10'];
+const DAYS = ['2026-10-28', '2026-10-29', '2026-10-30', '2026-11-02', '2026-11-03', '2026-11-04', '2026-11-05', '2026-11-06',
+  '2026-11-09', '2026-11-10', '2026-11-11', '2026-11-12', '2026-11-13', '2026-11-16', '2026-11-17'];
 const avail = async () => { DAY = DAYS.shift();
   return (await worker.fetch(new Request('https://w/', { method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Action': 'get-availability', 'X-Auth': 'pw' },
     body: JSON.stringify({ startDate: DAY, endDate: DAY, startTime: '09:00', endTime: '18:00' }) }), env, {})).json(); };
 const rank = (r, id) => r.members.find(m => m.id === id).rank;
 const pool = r => [...r.drawPool].sort((a, b) => a - b).join(',');
-// 10/28 에 바쁘게 만들기 — 고객사 전담 태그
+// 그날 바쁘게 만들기 — 고객사 전담 태그
 const busy = ids => { outlookBusy = Object.fromEntries(ids.map(id => [id, '[고객사] 현장 지원'])); };
 
-// 기본 이력: 1월 강진혁(3), 2월 이하영(2) — 배포 일정까지 등록된 '배정 완료'
-const baseHistory = () => {
-  sched = [evPage('E1', { memberId: 3, date: '2026-01-15', spin: 'L1' }), evPage('E2', { memberId: 2, date: '2026-02-10', spin: 'L2' })];
-  spin = [logPage('L1', '강진혁', 3, '2026-01-15'), logPage('L2', '이하영', 2, '2026-02-10')];
+// 날짜는 서버가 '오늘(한국 시간)' 기준으로 3개월을 계산하므로 오늘에서 거꾸로 만든다
+const TODAY = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+const ago = n => { const d = new Date(TODAY + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - n); return d.toISOString().slice(0, 10); };
+const monthsAgo = n => { const [y, m, d] = TODAY.split('-').map(Number); const t = new Date(Date.UTC(y, m - 1 - n, 1));
+  const last = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() + 1, 0)).getUTCDate(); t.setUTCDate(Math.min(d, last));
+  return t.toISOString().slice(0, 10); };
+const dayBefore = s => { const d = new Date(s + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - 1); return d.toISOString().slice(0, 10); };
+// 배정 완료 이력 만들기: [멤버ID, 이름, 투입일들]
+const history = (...rows) => {
+  sched = []; spin = [];
+  rows.forEach(([id, name, dates], i) => {
+    dates.forEach((dt, j) => sched.push(evPage(`E${i}_${j}`, { memberId: id, date: dt, spin: `L${i}` })));
+    spin.push(logPage(`L${i}`, name, id, dates[0]));
+  });
 };
+const recentNames = r => (r.recentPick ? r.recentPick.names.slice().sort().join(',') : '');
 
-console.log('\n[1] 말씀하신 예시 — 후보 강진혁·이하영·김요엘·윤이나');
-baseHistory(); busy([1, 4, 7, 8]);
+console.log('\n[1] 기본 — 가능 인원 동일 확률, 직전 선정자(이하영 10일 전)만 맨 뒤');
+history([3, '강진혁', [ago(40)]], [2, '이하영', [ago(10)]]); busy([1, 4, 7, 8]);
 let r = await avail();
-ok('순번 규칙으로 판정', r.drawRule === 'rotation', r.drawRule);
-ok('이번 추첨 대상 = 김요엘·윤이나 (배정 이력 없음)', pool(r) === '5,6', pool(r));
-ok('강진혁(1월) 대기 1', rank(r, 3) === 1, rank(r, 3));
-ok('이하영(2월) 대기 2', rank(r, 2) === 2, rank(r, 2));
-ok('불가 인원은 순번 없음', rank(r, 1) === null);
-ok('마지막 배정일 표시', r.members.find(m => m.id === 2).lastAssigned?.date === '2026-02-10');
-ok('이력 없는 사람은 lastAssigned=null', r.members.find(m => m.id === 5).lastAssigned === null);
+ok('규칙 표시', r.drawRule === 'recent-last', r.drawRule);
+ok('강진혁·김요엘·윤이나가 동일 확률 추첨 대상', pool(r) === '3,5,6', pool(r));
+ok('이하영은 후순위', rank(r, 2) === 1, rank(r, 2));
+ok('직전 선정자 안내 = 이하영, 뒤로 미룸', recentNames(r) === '이하영' && r.recentPick.behind === true, JSON.stringify(r.recentPick));
+ok('예전 배정자(강진혁)는 순서 영향 없음', rank(r, 3) === 0);
+ok('불가 인원은 순위 없음', rank(r, 1) === null);
+ok('마지막 배정 정보', r.members.find(m => m.id === 2).lastAssigned?.start === ago(10));
+ok('직전 선정자 표시', r.members.find(m => m.id === 2).recentPick === true && r.members.find(m => m.id === 3).recentPick === false);
 
-console.log('\n[2] 0순위가 모두 불가하면 오래전 배정자부터');
-busy([1, 4, 5, 6, 7, 8]);
-r = await avail();
-ok('강진혁만 추첨 대상', pool(r) === '3', pool(r));
-ok('이하영 대기 1', rank(r, 2) === 1);
+console.log('\n[2] 다른 가능 인원이 없으면 직전 선정자가 뽑힌다');
 busy([1, 3, 4, 5, 6, 7, 8]);
 r = await avail();
-ok('남은 사람이 직전 당첨자뿐이면 그 사람', pool(r) === '2', pool(r));
+ok('이하영만 추첨 대상', pool(r) === '2', pool(r));
 
-console.log('\n[3] 추첨만 됨·취소는 순번에 영향 없음');
-baseHistory(); busy([1, 4, 7, 8]);
-spin.push(logPage('L3', '김요엘', 5, '2026-09-01'));                        // 일정 없음 → 추첨만 됨
-spin.push({ ...logPage('L4', '[취소] 윤이나', null, '2026-09-02') });       // 취소 → 멤버ID 없음
+console.log('\n[3] 직전 선정이 3개월보다 오래됐으면 다시 동일 확률');
+history([3, '강진혁', [ago(130)]], [2, '이하영', [ago(100)]]); busy([1, 4, 7, 8]);
 r = await avail();
-ok('김요엘·윤이나 여전히 0순위', pool(r) === '5,6', pool(r));
-
-console.log('\n[4] 여러 날 배정은 마지막 투입일 기준');
-sched = [evPage('E1', { memberId: 3, date: '2026-03-02', spin: 'L1' }), evPage('E1b', { memberId: 3, date: '2026-03-20', spin: 'L1' }),
-         evPage('E2', { memberId: 2, date: '2026-03-10', spin: 'L2' })];
-spin = [logPage('L1', '강진혁', 3, '2026-03-02'), logPage('L2', '이하영', 2, '2026-03-10')];
-busy([1, 4, 5, 6, 7, 8]);
+ok('이하영도 추첨 대상 (3개월 경과)', pool(r) === '2,3,5,6', pool(r));
+ok('안내: 직전 선정자지만 뒤로 미루지 않음', recentNames(r) === '이하영' && r.recentPick.behind === false, JSON.stringify(r.recentPick));
+history([2, '이하영', [monthsAgo(3)]]); busy([1, 4, 7, 8]);
 r = await avail();
-ok('이하영(3/10 종료)이 강진혁(3/20 종료)보다 앞', pool(r) === '2' && rank(r, 3) === 1, `${pool(r)} / ${rank(r, 3)}`);
+ok('정확히 3개월 전 선정은 아직 뒤로 (경계)', pool(r) === '3,5,6', pool(r));
+history([2, '이하영', [dayBefore(monthsAgo(3))]]); busy([1, 4, 7, 8]);
+r = await avail();
+ok('3개월하고 하루 지난 선정은 동일 확률', pool(r) === '2,3,5,6', pool(r));
 
-console.log('\n[5] [긴급]은 같은 순번 안에서 뒤로');
-baseHistory();
+console.log('\n[4] 추첨만 됨·취소는 선정으로 치지 않음');
+history([2, '이하영', [ago(10)]]); busy([1, 4, 7, 8]);
+spin.push(logPage('LX', '김요엘', 5, ago(2)));            // 일정 없음 → 추첨만 됨
+spin.push(logPage('LY', '[취소] 윤이나', null, ago(1)));  // 취소 → 멤버ID 없음
+r = await avail();
+ok('직전 선정자는 여전히 이하영', recentNames(r) === '이하영', recentNames(r));
+ok('김요엘·윤이나는 동일 확률 대상', pool(r) === '3,5,6', pool(r));
+
+console.log('\n[5] 직전 선정 = 투입 시작일이 가장 늦은 배정 (긴 배정이 더 늦게 끝나도)');
+history([3, '강진혁', [ago(30), ago(1)]], [2, '이하영', [ago(5)]]); busy([1, 4, 7, 8]);
+r = await avail();
+ok('직전 선정자 = 이하영 (5일 전 시작)', recentNames(r) === '이하영', recentNames(r));
+ok('강진혁은 동일 확률 대상', pool(r) === '3,5,6', pool(r));
+
+console.log('\n[6] 같은 날 2명 투입이면 둘 다 뒤로');
+history([3, '강진혁', [ago(7)]], [2, '이하영', [ago(7)]]); busy([1, 4, 7, 8]);
+r = await avail();
+ok('김요엘·윤이나만 대상', pool(r) === '5,6', pool(r));
+ok('안내에 두 사람', recentNames(r) === ['강진혁', '이하영'].sort().join(','), recentNames(r));
+
+console.log('\n[7] [긴급]은 뒤로 (직전 선정자보다는 앞)');
+history([2, '이하영', [ago(10)]]);
 outlookBusy = { 1: '[고객사] 현장', 4: '[고객사] 현장', 7: '[고객사] 현장', 8: '[고객사] 현장', 5: '[티켓][긴급] 장애 대응' };
 r = await avail();
 ok('김요엘은 가능하지만 긴급', r.members.find(m => m.id === 5).urgent === true);
-ok('윤이나만 추첨 대상', pool(r) === '6', pool(r));
-ok('김요엘 대기 1 · 강진혁 대기 2 · 이하영 대기 3', rank(r, 5) === 1 && rank(r, 3) === 2 && rank(r, 2) === 3,
-  `${rank(r, 5)},${rank(r, 3)},${rank(r, 2)}`);
+ok('강진혁·윤이나만 대상', pool(r) === '3,6', pool(r));
+ok('김요엘 대기 1 · 이하영 대기 2', rank(r, 5) === 1 && rank(r, 2) === 2, `${rank(r, 5)},${rank(r, 2)}`);
 
-console.log('\n[6] 이력 대조 실패 → 가능 인원 전체 동일 확률');
-baseHistory(); busy([1, 4, 7, 8]); failDeployQuery = true;
+console.log('\n[8] 배정 이력이 전혀 없으면 가능 인원 전체 동일 확률');
+history(); busy([1, 4, 7, 8]);
+r = await avail();
+ok('가능 인원 전체', pool(r) === '2,3,5,6', pool(r));
+ok('직전 선정자 없음', r.recentPick === null);
+
+console.log('\n[9] 이력 대조 실패 → 가능 인원 전체 동일 확률');
+history([2, '이하영', [ago(10)]]); busy([1, 4, 7, 8]); failDeployQuery = true;
 r = await avail();
 ok('폴백 규칙 표시', r.drawRule === 'uniform-fallback', r.drawRule);
 ok('가능 인원 전체가 추첨 대상', pool(r) === '2,3,5,6', pool(r));
 failDeployQuery = false;
 
 // ════════════════════════════════════════════════════════════════════════
-// 화면 — 돌림판에는 이번 순번만
+// 화면 — 돌림판에는 이번 추첨 대상만
 // ════════════════════════════════════════════════════════════════════════
 const hsrc = fs.readFileSync('index.html', 'utf8');
 const hjs = [...hsrc.matchAll(/<script(?![^>]*src)[^>]*>([\s\S]*?)<\/script>/g)].map(m => m[1]).join('\n');
@@ -152,18 +184,24 @@ const M = await import('data:text/javascript,' + encodeURIComponent(patched + `
 ;export const api = { refreshRoulette, renderAvailableMembers, setAvailCtx(v){ availCtx = v; }, get slices(){ return wheelSlices; } };`));
 const A = M.api;
 const $ = id => document.getElementById(id);
+const setRange = () => { $('rDepDateStart').value = DAY; $('rDepDateEnd').value = DAY; $('rDepStart').value = '09:00'; $('rDepEnd').value = '18:00'; };
 
-console.log('\n[7] 돌림판 — 이번 순번만 올라가고, 목록엔 대기 순번 표시');
-baseHistory(); busy([1, 4, 7, 8]);
-r = await avail();
-$('rDepDateStart').value = DAY; $('rDepDateEnd').value = DAY; $('rDepStart').value = '09:00'; $('rDepEnd').value = '18:00';
+console.log('\n[10] 돌림판 — 이번 추첨 대상만, 직전 선정자는 후순위 표시');
+history([3, '강진혁', [ago(40)]], [2, '이하영', [ago(10)]]); busy([1, 4, 7, 8]);
+r = await avail(); setRange();
 A.setAvailCtx(r);
 A.refreshRoulette();
-ok('돌림판 = 김요엘·윤이나', A.slices.map(m => m.id).sort().join(',') === '5,6', A.slices.map(m => m.id).join(','));
-ok('안내에 이번 순번 인원 표시', /가능 4명.*이번 순번 2명/.test($('rrInfo').textContent), $('rrInfo').textContent);
-ok('목록에 이번 추첨·대기 표시', $('rrQueue').innerHTML.includes('이번 추첨') && $('rrQueue').innerHTML.includes('대기 2'));
-ok('규칙 안내 문구', $('rrRuleNote').innerHTML.includes('오래 배정되지 않은 사람부터'));
-A.setAvailCtx({ ...r, drawPool: undefined, drawRule: undefined });
+ok('돌림판 = 강진혁·김요엘·윤이나', A.slices.map(m => m.id).sort().join(',') === '3,5,6', A.slices.map(m => m.id).join(','));
+ok('안내에 이번 추첨 인원 표시', /가능 4명.*이번 추첨 3명/.test($('rrInfo').textContent), $('rrInfo').textContent);
+ok('목록에 직전 선정 후순위 표시', $('rrQueue').innerHTML.includes('직전 선정 · 후순위'));
+ok('규칙 안내에 직전 선정자 이름', $('rrRuleNote').innerHTML.includes('직전 선정자') && $('rrRuleNote').innerHTML.includes('이하영'),
+  $('rrRuleNote').innerHTML);
+history([2, '이하영', [ago(100)]]); busy([1, 4, 7, 8]);
+r = await avail(); setRange();
+A.setAvailCtx(r); A.refreshRoulette();
+ok('3개월 지난 경우 안내 문구', $('rrRuleNote').innerHTML.includes('다시 같은 확률로 참여'), $('rrRuleNote').innerHTML);
+ok('3개월 지난 경우 돌림판 = 가능 인원 전체', A.slices.length === 4, String(A.slices.length));
+A.setAvailCtx({ ...r, drawPool: undefined, drawRule: undefined, recentPick: undefined });
 A.refreshRoulette();
 ok('구버전 서버(drawPool 없음)면 가능 인원 전체', A.slices.length === 4, String(A.slices.length));
 
