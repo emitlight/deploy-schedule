@@ -183,6 +183,7 @@ Worker의 KV(`SETTINGS` / 키 `roster-config`)에 저장되어 **모든 PC에 �
 | `load-events` / `save-event` / `delete-event` | Notion 일정 CRUD |
 | `set-classification` | 수동 분류 저장 (전사 공유) |
 | `add-spinlog` / `get-spinlog` / `delete-spinlog` / `cancel-spinlog` / `add-resetlog` | 배정 이력 |
+| `update-spinlog` | 배정 기간 변경 시 이력의 날짜 + 메모의 `기간 a~b` 갱신 (2026-11-18) |
 | `list-calendars` | 캘린더 접근 테스트 |
 | `send-email` / `create-outlook-event` | 구현돼 있으나 **온프레미스 Exchange라 미동작** |
 | `vtiger-get-ticket` / `vtiger-update-ticket` / `vtiger-test` / `vtiger-list-users` | CRM (⛔ IP 차단) |
@@ -234,6 +235,12 @@ CI 배포(`deploy-worker.yml`)는 수동 실행 전용. 켜려면 GitHub Secrets
 
 > 여러 날 배정은 날짜마다 일정이 1건씩 생기고, **스핀로그ID는 첫날에만** 붙는다.
 > 배정 취소·하루 삭제는 `linkedDeployEvents()`로 같은 배정의 나머지 날을 함께 찾는다.
+> (기록의 confirmedRange + 메모 `기간 a~b` + 첫날부터 이어진 같은 업무 일정을 합쳐서 찾는다)
+> 서버 `annotateSpinLogs` 도 메모의 기간으로 나머지 날을 함께 센다 → 이력의 기간·일수가 실제와 일치.
+> **배정 기간 변경 (2026-11-18)**: 일정 수정 창의 '투입 기간' → `changeAssignmentPeriod()`.
+> 기존 일정을 날짜순으로 새 평일에 재배치(늘면 추가·줄면 삭제), 기록ID는 새 첫날에만, `update-spinlog` 로 이력 기간 갱신,
+> 변경 안내 mailto. CRM 자동 일정(노트 `CRM 담당자 자동 반영`)은 CRM 기간을 따르므로 차단.
+> 일정 수정 저장 시 날짜는 **원래 일정의 날짜를 유지**한다(과거엔 화면 선택 날짜로 옮겨지는 버그). 테스트: `테스트/_test_period_change.mjs`
 
 **SPINLOG_DB 속성**: 이름 · 날짜 · 스핀일 · 멤버ID
 → `[취소]`·`[초기화]` 로그는 **멤버ID를 비워** 우선순위·통계 계산에서 자동 제외된다.

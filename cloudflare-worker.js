@@ -404,6 +404,24 @@ export default {
           result={ok:true, pageId:page.id}; break;
         }
 
+        // ── 배정 기간 변경 시 이력의 날짜·기간 메모를 맞춘다 ──────────────
+        // 메모(스핀일)의 '기간 a~b' 부분만 바꾸고, 추첨 시각 등 나머지 글은 그대로 둔다.
+        case 'update-spinlog': {
+          if (!env.NOTION_SECRET||!env.SPINLOG_DB_ID) throw new Error('Notion 미설정');
+          await assertPageInDb(env, body?.pageId, env.SPINLOG_DB_ID);
+          const iso = /^\d{4}-\d{2}-\d{2}$/;
+          const from = String(body.from||''), to = String(body.to||body.from||'');
+          if (!iso.test(from) || !iso.test(to) || to < from) throw new Error('기간 형식 오류');
+          const page = await (await notion(env,'GET',`/pages/${body.pageId}`)).json();
+          const spunAt = getNotionRichText(page.properties||{}, '스핀일');
+          result = { ok:true, spunAt: periodMemo(spunAt, from, to) };
+          await notion(env,'PATCH',`/pages/${body.pageId}`, { properties: mapSpinProps({
+            'DATE':   {date:{start:from}},
+            'SPUNAT': {rich_text:[{text:{content:result.spunAt}}]},
+          }) });
+          break;
+        }
+
         // ── 당첨자 초기화 로그 기록 ─────────────────────────────────────
         case 'add-resetlog': {
           if (!env.NOTION_SECRET||!env.SPINLOG_DB_ID) throw new Error('Notion 미설정');
@@ -1260,6 +1278,20 @@ async function annotateSpinLogs(env, logs) {
   for (const log of logs) {
     if (log.memberId == null) continue;                    // [취소]·[초기화] 는 대상 아님
     let matched = bySpinId.get(String(log.id).replace(/-/g, '')) || [];
+    if (matched.length > 0) {
+      // 기록 ID는 여러 날 배정의 첫날에만 붙는다. 과거엔 그래서 '1일 배정'으로 집계됐다.
+      // → 메모의 기간 안에서 같은 멤버·같은 제목·같은 티켓인 나머지 날을 함께 센다.
+      const pm = (log.spunAt || '').match(/기간\s+(\d{4}-\d{2}-\d{2})\s*~\s*(\d{4}-\d{2}-\d{2})/);
+      if (pm) {
+        const f = matched[0], own = String(log.id).replace(/-/g, '');
+        const rest = deploys.filter(ev => !matched.includes(ev) &&
+          ev.memberId === f.memberId && ev.title === f.title &&
+          (ev.ticketNo || null) === (f.ticketNo || null) &&
+          ev.date >= pm[1] && ev.date <= pm[2] &&
+          (!ev.spinLogPageId || ev.spinLogPageId.replace(/-/g, '') === own));
+        matched = matched.concat(rest);
+      }
+    }
     if (matched.length === 0) {
       // 구 기록 호환: 멤버와 기간으로 추정
       const m = (log.spunAt || '').match(/기간\s+(\d{4}-\d{2}-\d{2})\s*~\s*(\d{4}-\d{2}-\d{2})/);
@@ -1685,6 +1717,16 @@ function getNotionRichText(props,key){return props[key]?.rich_text?.[0]?.text?.c
 function mapSpinProps(p){
   return {'이름':p['NAME'],'날짜':p['DATE'],'스핀일':p['SPUNAT'],
     ...(p['MEMBERID']?{'멤버ID':p['MEMBERID']}:{})};
+}
+
+// 이력 메모의 '기간 a~b' 를 새 기간으로 바꾼다 (없으면 덧붙인다). 하루짜리여도 기간으로 적는다.
+// 이 기간은 annotateSpinLogs 가 '같은 배정의 나머지 날'을 찾는 기준이라 실제 일정과 맞아야 한다.
+function periodMemo(spunAt, from, to) {
+  const tag = `기간 ${from}~${to}`;
+  const s = String(spunAt || '');
+  if (/기간\s+\d{4}-\d{2}-\d{2}\s*~\s*\d{4}-\d{2}-\d{2}/.test(s))
+    return s.replace(/기간\s+\d{4}-\d{2}-\d{2}\s*~\s*\d{4}-\d{2}-\d{2}/, tag);
+  return s ? `${s} · ${tag}` : tag;
 }
 
 // ── vtiger Auth ───────────────────────────────────────────────────────────

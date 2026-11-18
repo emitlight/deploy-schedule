@@ -8,6 +8,7 @@ node 테스트/_test_toggle.mjs      # 추가 인원 공유 설정 (서버)
 node 테스트/_test_toggle_ui.mjs   # 추가 인원 버튼 동작 (화면)
 node 테스트/_test_bugfix_1019.mjs # 10/19 결함 수정 (보안·배정 취소·통계 등)
 node 테스트/_test_crm_assign.mjs  # CRM 연동 (양방향)
+node 테스트/_test_period_change.mjs # 배정 기간 변경
 ```
 
 | 파일 | 확인 내용 |
@@ -15,4 +16,5 @@ node 테스트/_test_crm_assign.mjs  # CRM 연동 (양방향)
 | `_test_toggle.mjs` | 공유 설정 저장·조회, KV 미연결 시 폴백, KV 손상 시 서비스 지속 |
 | `_test_toggle_ui.mjs` | 버튼 클릭 → 서버 저장 → 라벨·인원수 갱신, 다른 PC 동기화, 미연결 안내 |
 | `_test_crm_assign.mjs` | CRM 담당자 → 배정 자동 반영(생성·연결·불일치·이동·기간·상한), 접수 담당자 처리, 담당자 변경 요청 대기열, 사내 스크립트의 CRM revise 절차, 티켓 카드 상태, 통계 배정 내역 |
+| `_test_period_change.mjs` | 같은 배정 묶음 찾기, 기간 변경(이동·늘리기·줄이기·주말 제외·CRM 자동 일정 차단), 수정 시 날짜 유지, 서버 이력 기간 갱신·여러 날 집계 |
 | `_test_bugfix_1019.mjs` | 외부 문자열 이스케이프(XSS), 티켓·추첨 상태 누수, 여러 날 배정 취소·하루 삭제, 공유 분류 표시, 수정 시 정보 보존, 서버 날짜 사용·중복 생성 방지, 조회 실패 멤버 제외, 통계 집계 기준 |
